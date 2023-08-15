@@ -4,7 +4,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:mirrors';
 
-import 'package:postgres/postgres.dart';
+import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
 
 import 'docker.dart';

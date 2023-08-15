@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:postgres/messages.dart';
-import 'package:postgres/postgres.dart';
+import 'package:postgres_fork/messages.dart';
+import 'package:postgres_fork/postgres.dart';
 import 'package:test/expect.dart';
 import 'package:test/scaffolding.dart';
 

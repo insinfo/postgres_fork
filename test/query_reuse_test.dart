@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:mirrors';
 
-import 'package:postgres/postgres.dart';
-import 'package:postgres/src/query_cache.dart';
+import 'package:postgres_fork/postgres.dart';
+import 'package:postgres_fork/src/query_cache.dart';
 import 'package:test/test.dart';
 
 import 'docker.dart';

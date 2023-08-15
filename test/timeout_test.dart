@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:postgres/postgres.dart';
+import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
 
 import 'docker.dart';

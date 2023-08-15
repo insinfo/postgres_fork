@@ -2,6 +2,20 @@
 
 [![CI](https://github.com/isoos/postgresql-dart/actions/workflows/dart.yml/badge.svg)](https://github.com/isoos/postgresql-dart/actions/workflows/dart.yml)
 
+
+postgres fork from https://github.com/isoos/postgresql-dart
+
+- Support has been implemented to change the character encoding for the connection, this makes it possible to change the default encoding from utf8 to win1252, iso8859, among others.
+
+- implemented executing a prepared statement with question mark placeholder style similar to PHP PDO
+```dart
+ final results = await connection.query(
+        ' SELECT * FROM public.table_example LIMIT ?',
+        substitutionValues: [2000], placeholderIdentifier: 
+        PlaceholderIdentifier.onlyQuestionMark);
+```
+
+
 A library for connecting to and querying PostgreSQL databases (see [Postgres Protocol](https://www.postgresql.org/docs/13/protocol-overview.html)).
 
 This driver uses the more efficient and secure extended query format of the PostgreSQL protocol.

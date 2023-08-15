@@ -1,4 +1,4 @@
-import 'package:postgres/postgres_v3_experimental.dart';
+import 'package:postgres_fork/postgres_v3_experimental.dart';
 
 void main() async {
   final database = PgEndpoint(host: 'localhost', database: 'postgres');

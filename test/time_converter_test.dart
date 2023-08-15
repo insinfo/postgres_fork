@@ -1,4 +1,4 @@
-import 'package:postgres/src/time_converters.dart';
+import 'package:postgres_fork/src/time_converters.dart';
 import 'package:test/expect.dart';
 import 'package:test/scaffolding.dart';
 

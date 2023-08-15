@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:postgres/postgres.dart';
-import 'package:postgres/src/query.dart';
+import 'package:postgres_fork/postgres.dart';
+import 'package:postgres_fork/src/query.dart';
 import 'package:test/test.dart';
 
 void main() {

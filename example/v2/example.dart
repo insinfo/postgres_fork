@@ -1,4 +1,4 @@
-import 'package:postgres/postgres.dart';
+import 'package:postgres_fork/postgres.dart';
 
 void main(List<String> args) async {
   final connection = PostgreSQLConnection(
