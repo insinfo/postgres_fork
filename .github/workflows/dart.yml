@@ -26,7 +26,7 @@ jobs:
           sudo echo 'pt_BR.CP1252 CP1252' >> /etc/locale.gen
           sudo locale-gen pt_BR.CP1252
           sudo locale-gen
-          sudo update-locale 
+          
 
       - uses: actions/checkout@v2
 
