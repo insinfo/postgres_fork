@@ -116,6 +116,15 @@ abstract class PostgreSQLExecutionContext {
     int? timeoutInSeconds,
     PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
   });
+
+  /// Executes a query on this connection and returns each row as a [Map].
+  Future<List<Map<String, dynamic>>> queryAsMap(
+    String fmtString, {
+    dynamic substitutionValues,
+    bool? allowReuse,
+    int? timeoutInSeconds,
+    PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
+  });
 }
 
 /// A description of a column.

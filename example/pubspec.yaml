@@ -1,0 +1,14 @@
+name: postgres_fork_example
+description: PostgreSQL example
+
+environment:
+  sdk: '>=2.17.0 <3.0.0'
+
+dependencies:  
+  postgres_fork:     
+    path: ../
+  enough_convert: any
+
+dev_dependencies:
+  
+

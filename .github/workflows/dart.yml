@@ -13,7 +13,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+        sdk: [2.18.3]
 
     steps:
       - uses: actions/checkout@v2
@@ -23,7 +27,8 @@ jobs:
       # https://github.com/dart-lang/setup-dart/blob/main/README.md
       # - uses: dart-lang/setup-dart@v1
       - uses: dart-lang/setup-dart@9a04e6d73cca37bd455e0608d7e5092f881fd603
-
+        with:
+            sdk: ${{ matrix.sdk }}
       - name: Install dependencies
         run: dart pub get
 

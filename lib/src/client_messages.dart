@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
 import 'package:charcode/ascii.dart';
+import 'package:enough_convert/enough_convert.dart';
+import 'package:postgres_fork/postgres.dart';
 
 import 'constants.dart';
 import 'encoded_string.dart';
@@ -52,23 +54,39 @@ class StartupMessage extends ClientMessage {
   final EncodedString _databaseName;
   final EncodedString _timeZone;
   final EncodedString _replication;
+  final Encoding encoding;
 
   StartupMessage(
     String databaseName,
     String timeZone, {
     String? username,
     ReplicationMode replication = ReplicationMode.none,
-    required Encoding encoding,
+    required this.encoding,
   })  : _databaseName = EncodedString(databaseName, encoding),
         _timeZone = EncodedString(timeZone, encoding),
-        _username =
-            username == null ? null : EncodedString(username, encoding),
+        _username = username == null ? null : EncodedString(username, encoding),
         _replication = EncodedString(replication.value, encoding);
 
   @override
   void applyToBuffer(ByteDataWriter buffer) {
-    var fixedLength = 48;
+    List<int> encodingString = [];
+    if (encoding is Utf8Codec) {
+      encodingString = [...utf8.encode('UTF8')];
+    } else if (encoding is AsciiCodec) {
+      encodingString = [...utf8.encode('ascii')];
+    } else if (encoding is Latin1Codec) {
+      encodingString = [...utf8.encode('ISO-8859-1')];
+    } else if (encoding is Windows1252Codec) {
+      encodingString = [...utf8.encode('WIN1252')];
+    } else {
+      //throw PostgreSQLException('encoding not supported');
+      encodingString = [...utf8.encode('UTF8')]; //UTF8ByteConstants.utf8;
+    }
+    encodingString.add(0);
+
+    var fixedLength = 43; //48
     var variableLength = _databaseName.byteLength + _timeZone.byteLength + 2;
+    variableLength = variableLength + encodingString.length;
 
     if (_username != null) {
       fixedLength += 5;
@@ -97,7 +115,7 @@ class StartupMessage extends ClientMessage {
     _databaseName.applyToBuffer(buffer);
 
     buffer.write(UTF8ByteConstants.clientEncoding);
-    buffer.write(UTF8ByteConstants.utf8);
+    buffer.write(encodingString);
 
     buffer.write(UTF8ByteConstants.timeZone);
     _timeZone.applyToBuffer(buffer);

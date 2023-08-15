@@ -554,9 +554,26 @@ abstract class _PostgreSQLExecutionContextMixin
   }
 
   @override
+  Future<List<Map<String, dynamic>>> queryAsMap(
+    String fmtString, {
+    dynamic substitutionValues = const <String, dynamic>{},
+    bool? allowReuse,
+    int? timeoutInSeconds,
+    PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
+  }) async {
+    final rs = await query(fmtString,
+        substitutionValues: substitutionValues,
+        allowReuse: allowReuse ?? false,
+        timeoutInSeconds: timeoutInSeconds,
+        placeholderIdentifier: placeholderIdentifier);
+
+    return rs.map((row) => row.toColumnMap()).toList();
+  }
+
+  @override
   Future<int> execute(
     String fmtString, {
-    dynamic substitutionValues = const <String, dynamic> {},
+    dynamic substitutionValues = const <String, dynamic>{},
     int? timeoutInSeconds,
     PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
   }) async {
