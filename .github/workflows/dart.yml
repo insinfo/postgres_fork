@@ -21,11 +21,11 @@ jobs:
 
     steps:
       - name: Start PostgreSQL on Ubuntu
-          run: |
-            locale -a
-            sudo locale-gen pt_BR.CP1252
-            sudo locale-gen
-            sudo update-locale 
+        run: |
+          sudo locale -a
+          sudo locale-gen pt_BR.CP1252
+          sudo locale-gen
+          sudo update-locale 
 
       - uses: actions/checkout@v2
 
