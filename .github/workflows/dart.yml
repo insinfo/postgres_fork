@@ -2,6 +2,14 @@
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
+# example
+# sudo apt-get install localeconf
+# sudo echo 'pt_BR.CP1252 CP1252' >> /etc/locale.gen    
+# sudo echo 'pt_BR.CP1252 CP1252' | sudo tee -a /etc/locale.gen > /dev/null   
+
+# sudo mkdir /usr/local/share/i18n
+# sudo touch /usr/local/share/i18n/SUPPORTED
+# sudo echo 'pt_BR.CP1252 CP1252' | sudo tee -a /usr/local/share/i18n/SUPPORTED > /dev/null   
 
 name: Dart
 
@@ -24,8 +32,12 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install tzdata locales -y   
           sudo localedef -f CP1252 -i /usr/share/i18n/locales/pt_BR /usr/lib/locale/pt_BR.CP1252
+          sudo echo 'pt_BR.CP1252 CP1252' | sudo tee -a /etc/locale.gen > /dev/null  
+          sudo mkdir /usr/local/share/i18n
+          sudo touch /usr/local/share/i18n/SUPPORTED
+          sudo echo 'pt_BR.CP1252 CP1252' | sudo tee -a /usr/local/share/i18n/SUPPORTED > /dev/null  
           sudo locale-gen pt_BR.UTF-8      
-          sudo locale-gen pt_BR.CP1252
+          sudo locale-gen pt_BR
           sudo locale-gen
           locale -a
           echo "Actual locale"
@@ -59,9 +71,12 @@ jobs:
 
       # pre-pull the image so `usePostgresDocker` does not delay which may causes 
       # tests to timeout
-      - name: pull latest postgres image
+      - name: pull postgres image
         run: docker pull postgres:latest
-
+        run: cd docker
+        run: docker build -t custom/postgres:14.3 .
+        run: docker run --rm --name="custom_postgres" -e POSTGRES_PASSWORD=dart -v "C:/Program Files/PostgreSQL/docker/volumes/custom_postgres_14.3:/var/lib/postgresql/data:rw" -p 5433:5432 custom/postgres:14.3 & 
+        run: cd ..
       # Run all tests with a concurency of "1" to allow each test to run independently. 
       #   This is mainly to prevent `tearDownAll` in `usePostgresDocker` from stoping
       #   the container while another test is using the container. In other words, each

@@ -8,7 +8,8 @@ dependencies:
   postgres_fork:     
     path: ../
   enough_convert: any
-
+  docker_process: any
+  
 dev_dependencies:
   
 

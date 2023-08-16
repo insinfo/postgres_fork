@@ -1,6 +1,6 @@
 # postgres
 
-[![CI](https://github.com/isoos/postgresql-dart/actions/workflows/dart.yml/badge.svg)](https://github.com/isoos/postgresql-dart/actions/workflows/dart.yml)
+[![CI](https://github.com/insinfo/postgres_fork/actions/workflows/dart.yml/badge.svg)](https://github.com/insinfo/postgres_fork/actions/workflows/dart.yml)
 
 
 postgres fork from https://github.com/isoos/postgresql-dart

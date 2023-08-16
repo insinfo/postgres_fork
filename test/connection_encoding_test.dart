@@ -11,7 +11,7 @@ void main() {
   setUp(() async {
     final startConn = PostgreSQLConnection(
       'localhost',
-      5432,
+      5433,
       'dart_test',
       username: 'dart',
       password: 'dart',
