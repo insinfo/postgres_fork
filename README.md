@@ -1,7 +1,7 @@
 # postgres
 
 [![CI](https://github.com/insinfo/postgres_fork/actions/workflows/dart.yml/badge.svg)](https://github.com/insinfo/postgres_fork/actions/workflows/dart.yml)
-
+[![Pub Package](https://img.shields.io/pub/v/postgres_fork.svg)](https://pub.dev/packages/postgres_fork)  
 
 postgres fork from https://github.com/isoos/postgresql-dart
 
