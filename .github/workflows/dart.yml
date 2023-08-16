@@ -22,7 +22,8 @@ jobs:
     steps:
       - name: SetLocale
         run: |
-          sudo apt-get update && sudo apt-get install tzdata locales -y      
+          sudo apt-get update && sudo apt-get install tzdata locales -y   
+          sudo cat /usr/local/share/i18n/SUPPORTED   
           sudo locale-gen pt_BR.UTF-8      
           sudo locale-gen pt_BR.CP1252
           sudo locale-gen
