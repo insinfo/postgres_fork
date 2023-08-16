@@ -20,13 +20,22 @@ jobs:
         sdk: [2.18.3]
 
     steps:
-      - name: Start PostgreSQL on Ubuntu
+      - name: SetLocale
         run: |
-          sudo locale -a
-          sudo echo 'pt_BR.CP1252 CP1252' >> /etc/locale.gen
+          sudo apt-get update && sudo apt-get install tzdata locales -y          
+          sudo echo 'pt_BR.CP1252 CP1252' >> /etc/locale.gen    
+          sudo locale-gen pt_BR.UTF-8      
           sudo locale-gen pt_BR.CP1252
           sudo locale-gen
-          
+          locale -a
+          echo "Actual locale"
+          locale
+          echo "Actual numeric settings"
+          locale -c -k LC_NUMERIC
+          echo "LANG Variable"
+          echo "$LANG"
+          echo "LocaleCtl"
+          localectl status
 
       - uses: actions/checkout@v2
 
