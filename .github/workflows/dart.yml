@@ -23,7 +23,7 @@ jobs:
       - name: SetLocale
         run: |
           sudo apt-get update && sudo apt-get install tzdata locales -y   
-          sudo echo 'pt_BR.CP1252 CP1252' > /usr/local/share/i18n/SUPPORTED   
+          localedef -f CP1252 -i /usr/share/i18n/locales/pt_BR /usr/lib/locale/pt_BR.CP1252
           sudo locale-gen pt_BR.UTF-8      
           sudo locale-gen pt_BR.CP1252
           sudo locale-gen
