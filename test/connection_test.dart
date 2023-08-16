@@ -648,14 +648,14 @@ void main() {
         'Connection that times out throws appropriate error and cannot be reused',
         () async {
       serverSocket =
-          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5433);
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5434);
       serverSocket!.listen((s) {
         socket = s;
         // Don't respond on purpose
         s.listen((bytes) {});
       });
 
-      final conn = PostgreSQLConnection('localhost', 5433, 'dart_test',
+      final conn = PostgreSQLConnection('localhost', 5434, 'dart_test',
           timeoutInSeconds: 2);
 
       try {
@@ -672,14 +672,14 @@ void main() {
         'SSL Connection that times out throws appropriate error and cannot be reused',
         () async {
       serverSocket =
-          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5433);
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5434);
       serverSocket!.listen((s) {
         socket = s;
         // Don't respond on purpose
         s.listen((bytes) {});
       });
 
-      final conn = PostgreSQLConnection('localhost', 5433, 'dart_test',
+      final conn = PostgreSQLConnection('localhost', 5434, 'dart_test',
           timeoutInSeconds: 2, useSSL: true);
 
       try {
@@ -696,7 +696,7 @@ void main() {
         () async {
       final openCompleter = Completer();
       serverSocket =
-          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5433);
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5434);
       serverSocket!.listen((s) {
         socket = s;
         // Don't respond on purpose
@@ -704,7 +704,7 @@ void main() {
         Future.delayed(Duration(milliseconds: 100), openCompleter.complete);
       });
 
-      final conn = PostgreSQLConnection('localhost', 5433, 'dart_test',
+      final conn = PostgreSQLConnection('localhost', 5434, 'dart_test',
           timeoutInSeconds: 2);
       conn.open().catchError((e) {});
 
@@ -722,7 +722,7 @@ void main() {
         () async {
       final openCompleter = Completer();
       serverSocket =
-          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5433);
+          await ServerSocket.bind(InternetAddress.loopbackIPv4, 5434);
       serverSocket!.listen((s) {
         socket = s;
         // Don't respond on purpose
@@ -730,7 +730,7 @@ void main() {
         Future.delayed(Duration(milliseconds: 100), openCompleter.complete);
       });
 
-      final conn = PostgreSQLConnection('localhost', 5433, 'dart_test',
+      final conn = PostgreSQLConnection('localhost', 5434, 'dart_test',
           timeoutInSeconds: 2, useSSL: true);
       conn.open().catchError((e) {
         return null;

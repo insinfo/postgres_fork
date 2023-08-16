@@ -110,13 +110,13 @@ void main() {
       final result = await connection.execute(
           'INSERT INTO t (j) VALUES (@a:jsonb) RETURNING j',
           substitutionValues: {
-            'a': {'a': 4}
+            'a': {'text': 4}
           });
       expect(result, 1);
       final resultQuery = await connection.query('SELECT j FROM t');
       expect(resultQuery, [
         [
-          {'a': 4}
+          {'text': 4}
         ]
       ]);
     });

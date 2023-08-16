@@ -1,17 +1,18 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:enough_convert/enough_convert.dart';
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
-import 'docker.dart';
+
+//import 'docker.dart';
+
 
 void main() {
-  usePostgresDocker();
+ // usePostgresDocker();
   late PostgreSQLConnection connection;
   setUp(() async {
     final startConn = PostgreSQLConnection(
       'localhost',
-      5433,
+      5435,
       'dart_test',
       username: 'dart',
       password: 'dart',
@@ -21,13 +22,13 @@ void main() {
     final dbExist = await startConn.query(
         '''SELECT * FROM pg_database WHERE datname = 'dart_test_cp1252';''');
     if (dbExist.isEmpty) {
-      if (Platform.isWindows) {
-        await startConn.query(
-            '''CREATE DATABASE dart_test_cp1252 TEMPLATE = template0 ENCODING = 'WIN1252' LC_COLLATE = 'pt-BR' LC_CTYPE = 'pt-BR';''');
-      } else {
+      // if (Platform.isWindows) {
+      //   await startConn.query(
+      //       '''CREATE DATABASE dart_test_cp1252 TEMPLATE = template0 ENCODING = 'WIN1252' LC_COLLATE = 'pt-BR' LC_CTYPE = 'pt-BR';''');
+      // } else {
         await startConn.query(
             '''CREATE DATABASE dart_test_cp1252 TEMPLATE = template0 ENCODING = 'WIN1252' LC_COLLATE = 'pt_BR.cp1252' LC_CTYPE = 'pt_BR.cp1252';''');
-      }
+      //}
     }
     //await connection .query('''CREATE ROLE dart WITH LOGIN SUPERUSER PASSWORD 'dart';''');
     await startConn.query(r''' do
@@ -43,15 +44,15 @@ $$
 
     connection = PostgreSQLConnection(
       'localhost',
-      5432,
-      'dart_test',
+      5435,
+      'dart_test_cp1252',
       username: 'dart',
       password: 'dart',
       encoding: Windows1252Codec(allowInvalid: false),
     );
     await connection.open();
     await connection.query('''SET client_encoding = 'win1252';''');
-    //await connection.query('''DROP TABLE IF EXISTS public.favorites;''');
+    await connection.query('''DROP TABLE IF EXISTS public.favorites;''');
     await connection.execute('''
   CREATE TABLE IF NOT EXISTS public.favorites (
   "id" serial4 NOT NULL, 
