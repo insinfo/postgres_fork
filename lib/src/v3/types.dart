@@ -4,6 +4,7 @@ import 'dart:core' as core;
 import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
+import 'package:postgres_fork/src/timezone_settings.dart';
 
 import '../binary_codec.dart';
 import '../text_codec.dart';
@@ -126,13 +127,14 @@ enum PgDataType<Dart extends Object> {
   /// The object ID of this data type.
   final int? oid;
 
-  Codec<Dart?, Uint8List?> binaryCodec(Encoding charset) {
+  Codec<Dart?, Uint8List?> binaryCodec(
+      Encoding charset, TimeZoneSettings timeZone) {
     if (charset is Utf8Codec) {
       return _binaryCodecs.putIfAbsent(
-              this, () => _BinaryTypeCodec<Dart>(this, charset))
+              this, () => _BinaryTypeCodec<Dart>(this, charset, timeZone))
           as Codec<Dart?, Uint8List?>;
     } else {
-      return _BinaryTypeCodec<Dart>(this, charset);
+      return _BinaryTypeCodec<Dart>(this, charset, timeZone);
     }
   }
 
@@ -164,13 +166,14 @@ class _BinaryTypeCodec<D extends Object> extends Codec<D?, Uint8List?> {
   final Converter<Uint8List?, D?> decoder;
 
   final Encoding charset;
+  TimeZoneSettings timeZone;
 
-  _BinaryTypeCodec(PgDataType<D> type, this.charset)
+  _BinaryTypeCodec(PgDataType<D> type, this.charset, this.timeZone)
       : encoder = PostgresBinaryEncoder(type, charset),
         // Only some integer variants have no dedicated oid, they share it with
         // the normal integer.
-        decoder =
-            PostgresBinaryDecoder(type.oid ?? PgDataType.integer.oid!, charset);
+        decoder = PostgresBinaryDecoder(
+            type.oid ?? PgDataType.integer.oid!, charset, timeZone);
 }
 
 class _TextTypeCodec<D extends Object> extends Codec<D?, Uint8List?> {

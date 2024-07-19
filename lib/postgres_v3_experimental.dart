@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:postgres_fork/src/timezone_settings.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'src/v3/connection.dart';
@@ -204,13 +205,14 @@ class PgEndpoint {
   final bool requireSsl;
   final bool isUnixSocket;
   final Encoding encoding;
+  late TimeZoneSettings timeZone;
 
   /// Whether the client should send the password to the server in clear-text
   /// for authentication.
   ///
   /// For security reasons, it is recommended to keep this disabled.
   final bool allowCleartextPassword;
-
+  /// [timeZone] default = TimeZoneSettings('UTC')
   PgEndpoint({
     required this.host,
     this.port = 5432,
@@ -221,7 +223,10 @@ class PgEndpoint {
     this.isUnixSocket = false,
     this.allowCleartextPassword = false,
     this.encoding = utf8,
-  });
+    TimeZoneSettings? timeZone,
+  }){
+    this.timeZone = timeZone ?? TimeZoneSettings('UTC');
+  }
 }
 
 class PgSessionSettings {
@@ -229,7 +234,7 @@ class PgSessionSettings {
   final Duration? connectTimeout;
   // Duration(minutes: 5)
   final Duration? queryTimeout;
-  final String? timeZone;
+  final TimeZoneSettings? timeZone;
   final Encoding? encoding;
   final bool Function(X509Certificate)? onBadSslCertificate;
 

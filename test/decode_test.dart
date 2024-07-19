@@ -234,7 +234,7 @@ void main() {
       '0.0': [0, 0, 0, 0, 0, 0, 0, 1], // .0 or 0.0
     };
 
-    final decoder = PostgresBinaryDecoder(1700,utf8);
+    final decoder = PostgresBinaryDecoder(1700, utf8, TimeZoneSettings('UTC'));
     binaries.forEach((key, value) {
       final uint8List = Uint8List.fromList(value);
       final res = decoder.convert(uint8List);

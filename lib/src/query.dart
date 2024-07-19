@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
+import 'package:postgres_fork/src/timezone_settings.dart';
 
 import 'binary_codec.dart';
 import 'client_messages.dart';
@@ -106,7 +107,8 @@ class Query<T> {
           parameterList.add(ParameterValue(
               id,
               substitutionValues as Map<String, dynamic>?,
-              connection.encoding));
+              connection.encoding,
+              connection.timeZone));
         }
 
         return sqlString;
@@ -115,8 +117,8 @@ class Query<T> {
         _prepareSubstitutionValues(cb: (map, key) {
           final identifier = PostgreSQLFormatIdentifier('@$key');
           formatIdentifiers.add(identifier);
-          parameterList
-              .add(ParameterValue(identifier, map, connection.encoding));
+          parameterList.add(ParameterValue(
+              identifier, map, connection.encoding, connection.timeZone));
         });
         return toStatement2(statement);
 
@@ -173,8 +175,8 @@ class Query<T> {
       Map<String, dynamic>? substitutionValues) {
     final statementName = cacheQuery.preparedStatementName;
     final parameterList = cacheQuery.orderedParameters!
-        .map((identifier) =>
-            ParameterValue(identifier, substitutionValues, connection.encoding))
+        .map((identifier) => ParameterValue(identifier, substitutionValues,
+            connection.encoding, connection.timeZone))
         .toList();
 
     final bytes = ClientMessage.aggregateBytes([
@@ -288,20 +290,24 @@ class CachedQuery {
 
 class ParameterValue {
   /// [substitutionValues] = Map<String,dynamic> | List<Object?>
-  factory ParameterValue(PostgreSQLFormatIdentifier identifier,
-      Map<String, dynamic>? substitutionValues, Encoding encoding) {
+  factory ParameterValue(
+      PostgreSQLFormatIdentifier identifier,
+      Map<String, dynamic>? substitutionValues,
+      Encoding encoding,
+      TimeZoneSettings timeZone) {
     final value = substitutionValues?[identifier.name];
 
     if (identifier.type == null) {
       return ParameterValue.text(value, encoding);
     }
 
-    return ParameterValue.binary(value, identifier.type!, encoding);
+    return ParameterValue.binary(value, identifier.type!, encoding, timeZone);
   }
 
-  factory ParameterValue.binary(
-      dynamic value, PostgreSQLDataType postgresType, Encoding encoding) {
-    final bytes = postgresType.binaryCodec(encoding).encoder.convert(value);
+  factory ParameterValue.binary(dynamic value, PostgreSQLDataType postgresType,
+      Encoding encoding, TimeZoneSettings timeZone) {
+    final bytes =
+        postgresType.binaryCodec(encoding, timeZone).encoder.convert(value);
     return ParameterValue._(true, bytes, bytes?.length ?? 0);
   }
 
@@ -354,7 +360,8 @@ class FieldDescription implements ColumnDescription {
     this.encoding,
   );
 
-  factory FieldDescription.read(ByteDataReader reader, Encoding encoding) {
+  factory FieldDescription.read(
+      ByteDataReader reader, Encoding encoding, TimeZoneSettings  timeZone) {
     final buf = StringBuffer();
     var byte = 0;
     do {
@@ -372,8 +379,10 @@ class FieldDescription implements ColumnDescription {
     final dataTypeSize = reader.readUint16();
     final typeModifier = reader.readInt32();
     final formatCode = reader.readUint16();
+    
 
-    final converter = PostgresBinaryDecoder(typeOid, encoding);
+    final converter = PostgresBinaryDecoder(typeOid, encoding, timeZone);
+
     return FieldDescription._(
       converter, fieldName, tableID, columnID, typeOid,
       dataTypeSize, typeModifier, formatCode,

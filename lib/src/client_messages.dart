@@ -52,18 +52,18 @@ abstract class ClientMessage extends BaseMessage {
 class StartupMessage extends ClientMessage {
   final EncodedString? _username;
   final EncodedString _databaseName;
-  final EncodedString _timeZone;
+  final EncodedString? _timeZone;
   final EncodedString _replication;
   final Encoding encoding;
 
   StartupMessage(
     String databaseName,
-    String timeZone, {
+    TimeZoneSettings timeZone, {
     String? username,
     ReplicationMode replication = ReplicationMode.none,
     required this.encoding,
   })  : _databaseName = EncodedString(databaseName, encoding),
-        _timeZone = EncodedString(timeZone, encoding),
+        _timeZone = EncodedString(timeZone.value, encoding),
         _username = username == null ? null : EncodedString(username, encoding),
         _replication = EncodedString(replication.value, encoding);
 
@@ -85,8 +85,13 @@ class StartupMessage extends ClientMessage {
     encodingString.add(0);
 
     var fixedLength = 43; //48
-    var variableLength = _databaseName.byteLength + _timeZone.byteLength + 2;
+    //var variableLength = _databaseName.byteLength + _timeZone.byteLength + 2;
+    var variableLength = _databaseName.byteLength + 1;
     variableLength = variableLength + encodingString.length;
+
+    if (_timeZone != null) {
+      variableLength += _timeZone!.byteLength + 1;
+    }
 
     if (_username != null) {
       fixedLength += 5;
@@ -117,8 +122,10 @@ class StartupMessage extends ClientMessage {
     buffer.write(UTF8ByteConstants.clientEncoding);
     buffer.write(encodingString);
 
-    buffer.write(UTF8ByteConstants.timeZone);
-    _timeZone.applyToBuffer(buffer);
+    if (_timeZone != null) {
+      buffer.write(UTF8ByteConstants.timeZone);
+      _timeZone!.applyToBuffer(buffer);
+    }
 
     buffer.writeInt8(0);
   }

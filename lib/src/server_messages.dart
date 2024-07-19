@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
 
+import 'package:postgres_fork/src/timezone_settings.dart';
 
 import '../messages.dart';
 import 'connection.dart';
@@ -67,16 +68,21 @@ class AuthenticationMessage implements ServerMessage {
 class ParameterStatusMessage extends ServerMessage {
   final String name;
   final String value;
-  final Encoding encoding;
 
-  ParameterStatusMessage._(this.name, this.value, this.encoding);
+  ParameterStatusMessage._(this.name, this.value);
 
-  factory ParameterStatusMessage(Uint8List bytes, Encoding encoding) {
+  factory ParameterStatusMessage(
+      Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone) {
     final first0 = bytes.indexOf(0);
     final name = encoding.decode(bytes.sublist(0, first0));
     final value =
         encoding.decode(bytes.sublist(first0 + 1, bytes.lastIndexOf(0)));
-    return ParameterStatusMessage._(name, value, encoding);
+
+    if (name.toLowerCase() == 'timezone') {
+      timeZone.value = value;
+      //print('ParameterStatusMessage ${timeZone.value} ');      
+    }
+    return ParameterStatusMessage._(name, value);
   }
 }
 
@@ -87,7 +93,8 @@ class ReadyForQueryMessage extends ServerMessage {
 
   final String state;
 
-  ReadyForQueryMessage(Uint8List bytes, Encoding encoding) : state = encoding.decode(bytes);
+  ReadyForQueryMessage(Uint8List bytes, Encoding encoding)
+      : state = encoding.decode(bytes);
 
   @override
   String toString() {
@@ -112,14 +119,12 @@ class BackendKeyMessage extends ServerMessage {
 class RowDescriptionMessage extends ServerMessage {
   final fieldDescriptions = <FieldDescription>[];
 
-  final Encoding encoding;
-
-  RowDescriptionMessage(Uint8List bytes, this.encoding) {
+  RowDescriptionMessage(Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone) {
     final reader = ByteDataReader()..add(bytes);
-    final fieldCount = reader.readInt16();
+    final fieldCount = reader.readInt16();   
 
     for (var i = 0; i < fieldCount; i++) {
-      final rowDesc = FieldDescription.read(reader, encoding);
+      final rowDesc = FieldDescription.read(reader, encoding, timeZone);
       fieldDescriptions.add(rowDesc);
     }
   }
@@ -317,7 +322,7 @@ class XLogDataMessage implements ReplicationMessage, ServerMessage {
     required this.walEnd,
     required this.time,
     required this.bytes,
-   // required this.encoding,
+    // required this.encoding,
   });
 
   /// Parses the XLogDataMessage
@@ -325,14 +330,14 @@ class XLogDataMessage implements ReplicationMessage, ServerMessage {
   /// If [XLogDataMessage.data] is a [LogicalReplicationMessage], then the method
   /// will return a [XLogDataLogicalMessage] with that message. Otherwise, it'll
   /// return [XLogDataMessage] with raw data.
-  static XLogDataMessage parse(Uint8List bytes,  Encoding encoding) {
+  static XLogDataMessage parse(Uint8List bytes, Encoding encoding) {
     final reader = ByteDataReader()..add(bytes);
     final walStart = LSN(reader.readUint64());
     final walEnd = LSN(reader.readUint64());
     final time = dateTimeFromMicrosecondsSinceY2k(reader.readUint64());
     final data = reader.read(reader.remainingLength);
 
-    final message = tryParseLogicalReplicationMessage(data,encoding);
+    final message = tryParseLogicalReplicationMessage(data, encoding);
     if (message != null) {
       return XLogDataLogicalMessage(
         message: message,

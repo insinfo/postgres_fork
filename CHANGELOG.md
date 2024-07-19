@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.8.0
+
+- **Breaking change**: decode timestamp without timezone as local DateTime and decode timestamp with timezone respecting the timezone defined in the connection
+
+- **Breaking change**: timeZone option in PostgreSQLConnection is now a TimeZoneSettings type instead of String
+
 ## 2.7.0
 
 - Support has been implemented to change the character encoding for the connection, this makes it possible to change the default encoding from utf8 to win1252, iso8859, among others.

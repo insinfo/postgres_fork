@@ -7,6 +7,7 @@ import 'package:async/async.dart';
 import 'package:charcode/ascii.dart';
 import 'package:collection/collection.dart';
 import 'package:pool/pool.dart';
+import 'package:postgres_fork/postgres.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import '../../postgres_v3_experimental.dart';
@@ -35,7 +36,7 @@ class _ResolvedSettings {
 
   final Duration connectTimeout;
   final Duration queryTimeout;
-  final String timeZone;
+  final TimeZoneSettings timeZone;
   final Encoding encoding;
 
   final StreamChannelTransformer<BaseMessage, BaseMessage>? transformer;
@@ -48,7 +49,7 @@ class _ResolvedSettings {
         connectTimeout =
             settings?.connectTimeout ?? const Duration(seconds: 15),
         queryTimeout = settings?.connectTimeout ?? const Duration(minutes: 5),
-        timeZone = settings?.timeZone ?? 'UTC',
+        timeZone = settings?.timeZone ?? endpoint.timeZone,
         encoding = settings?.encoding ?? endpoint.encoding,
         transformer = settings?.transformer;
 
@@ -166,7 +167,7 @@ class PgConnectionImplementation implements PgConnection {
     //     WrapMessageTransformer(settings.encoding).messageTransformer);
 
     return StreamChannel<List<int>>(adaptedStream, outgoingSocket)
-        .transform(messageTransformer(settings.encoding));
+        .transform(messageTransformer(settings.encoding, settings.timeZone));
   }
 
   final StreamChannel<BaseMessage> _channel;
@@ -392,7 +393,7 @@ class _PgResultStreamSubscription
           [
             for (final parameter in statement.parameters)
               ParameterValue.binary(parameter.value, parameter.type,
-                  connection._settings.encoding)
+                  connection._settings.encoding, connection._settings.timeZone)
           ],
           portalName: _portalName,
           statementName: statement.statement._name,
@@ -454,7 +455,8 @@ class _PgResultStreamSubscription
 
         final type = field.type;
         final codec = field.binaryEncoding
-            ? type.binaryCodec(connection._settings.encoding)
+            ? type.binaryCodec(
+                connection._settings.encoding, connection._settings.timeZone)
             : type.textCodec(connection._settings.encoding);
 
         columnValues.add(codec.decode(message.values[i]));

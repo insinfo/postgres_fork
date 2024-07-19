@@ -8,16 +8,14 @@ import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
 import 'package:meta/meta.dart';
+import 'package:postgres_fork/postgres.dart';
 
 import 'auth/auth.dart';
 import 'client_messages.dart';
-import 'execution_context.dart';
 import 'message_window.dart';
-import 'placeholder_identifier_enum.dart';
 import 'query.dart';
 import 'query_cache.dart';
 import 'query_queue.dart';
-import 'replication.dart';
 import 'server_messages.dart';
 
 part 'connection_fsm.dart';
@@ -39,9 +37,10 @@ class PostgreSQLConnection extends Object
   /// [username] and [password] are optional if the database requires user authentication.
   /// [timeoutInSeconds] refers to the amount of time [PostgreSQLConnection] will wait while establishing a connection before it gives up.
   /// [queryTimeoutInSeconds] refers to the default timeout for [PostgreSQLExecutionContext]'s execute and query methods.
-  /// [timeZone] is the timezone the connection is in. Defaults to 'UTC'.
+  /// [timeZone] is the timeZone the connection is in. Defaults to 'UTC'.
   /// [useSSL] when true, uses a secure socket when connecting to a PostgreSQL database.
   /// [allowClearTextPassword] when true, allows sending the password during authentication in clear text. Use only when required by the database server and under encrypted connections, this feature may lead to security issues.
+  /// [timeZone] = default = TimeZoneSettings('UTC')
   PostgreSQLConnection(
     this.host,
     this.port,
@@ -51,12 +50,13 @@ class PostgreSQLConnection extends Object
     this.password,
     this.timeoutInSeconds = 30,
     this.queryTimeoutInSeconds = 30,
-    this.timeZone = 'UTC',
+    TimeZoneSettings? timeZone,
     this.useSSL = false,
     this.isUnixSocket = false,
     this.allowClearTextPassword = false,
     this.replicationMode = ReplicationMode.none,
   }) {
+    this.timeZone = timeZone ?? TimeZoneSettings('UTC');
     _connectionState = _PostgreSQLConnectionStateClosed();
     _connectionState.connection = this;
   }
@@ -91,8 +91,8 @@ class PostgreSQLConnection extends Object
   /// The default timeout for [PostgreSQLExecutionContext]'s execute and query methods.
   final int queryTimeoutInSeconds;
 
-  /// The timezone of this connection for date operations that don't specify a timezone.
-  final String timeZone;
+  /// The timeZone of this connection for date operations that don't specify a timeZone.
+  TimeZoneSettings timeZone = TimeZoneSettings('UTC');
 
   /// The processID of this backend.
   int get processID => _processID;
@@ -194,7 +194,7 @@ class PostgreSQLConnection extends Object
             .timeout(Duration(seconds: timeoutInSeconds));
       }
 
-      _framer = MessageFramer(encoding);
+      _framer = MessageFramer(encoding, timeZone);
       if (useSSL) {
         _socket =
             await _upgradeSocketToSSL(_socket!, timeout: timeoutInSeconds);
