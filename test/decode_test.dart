@@ -81,8 +81,8 @@ void main() {
     expect(row1[8], equals(10.0));
     // changed to local DateTime
     expect(row1[9], equals(DateTime(1983, 11, 6)));
-    
-    expect(row1[10], equals(DateTime.utc(1983, 11, 6, 6)));
+
+    expect(row1[10], equals(DateTime(1983, 11, 6, 6)));
     expect(row1[11], equals(DateTime.utc(1983, 11, 6, 6)));
     expect(row1[12], equals('-1234567890.0987654321'));
     expect(row1[13], equals({'key': 'value'}));
