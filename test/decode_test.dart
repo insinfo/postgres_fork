@@ -117,7 +117,7 @@ void main() {
     expect(row2[8] is double, true);
     expect(row2[8], equals(10.125));
     expect(row2[9], equals(DateTime(2183, 11, 6)));
-    expect(row2[10], equals(DateTime.utc(2183, 11, 6, 0, 0, 0, 111, 111)));
+    expect(row2[10], equals(DateTime(2183, 11, 6, 0, 0, 0, 111, 111)));
     expect(row2[11], equals(DateTime.utc(2183, 11, 6, 0, 0, 0, 999, 999)));
     expect(row2[12],
         equals('1000000000000000000000000000.0000000000000000000000000001'));
