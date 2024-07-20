@@ -145,9 +145,9 @@ void main() {
     });
 
     test('date', () async {
-      await expectInverse(DateTime.utc(1920, 10, 1), PostgreSQLDataType.date);
-      await expectInverse(DateTime.utc(2120, 10, 5), PostgreSQLDataType.date);
-      await expectInverse(DateTime.utc(2016, 10, 1), PostgreSQLDataType.date);
+      await expectInverse(DateTime(1920, 10, 1), PostgreSQLDataType.date);
+      await expectInverse(DateTime(2120, 10, 5), PostgreSQLDataType.date);
+      await expectInverse(DateTime(2016, 10, 1), PostgreSQLDataType.date);
       try {
         await conn.query('INSERT INTO t (v) VALUES (@v:date)',
             substitutionValues: {'v': 'not-date'});
@@ -158,9 +158,9 @@ void main() {
     });
 
     test('timestamp', () async {
-      await expectInverse(DateTime.utc(1920, 10, 1),
+      await expectInverse(DateTime(1920, 10, 1),
           PostgreSQLDataType.timestampWithoutTimezone);
-      await expectInverse(DateTime.utc(2120, 10, 5),
+      await expectInverse(DateTime(2120, 10, 5),
           PostgreSQLDataType.timestampWithoutTimezone);
       try {
         await conn.query('INSERT INTO t (v) VALUES (@v:timestamp)',

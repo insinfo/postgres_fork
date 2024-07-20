@@ -60,7 +60,7 @@ $$
     await connection.query(
       ''' INSERT INTO public.favorites (date_register,description) VALUES ( ? , ? ) returning id ''',
       substitutionValues: [
-        DateTime.parse('2023-08-15 16:07:36.000Z'),
+        DateTime.parse('2023-08-15 16:07:36.000'),
         'City Hall of São Paulo - Brazil'
       ],
       placeholderIdentifier: PlaceholderIdentifier.onlyQuestionMark,
@@ -78,7 +78,7 @@ $$
 
     expect(results, [
       [       
-        DateTime.parse('2023-08-15 16:07:36.000Z'),
+        DateTime.parse('2023-08-15 16:07:36.000'),
         'City Hall of São Paulo - Brazil'
       ]
     ]);
