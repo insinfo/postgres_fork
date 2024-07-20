@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.8.1
+
+- change timezone to external pkg
+- makes the timeZone parameter of PostgreSQLConnection more flexible to be compatible with String or TimeZoneSettings instance
+
 ## 2.8.0
 
 - **Breaking change**: decode timestamp without timezone as local DateTime and decode timestamp with timezone respecting the timezone defined in the connection
