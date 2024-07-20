@@ -212,7 +212,7 @@ class PgEndpoint {
   ///
   /// For security reasons, it is recommended to keep this disabled.
   final bool allowCleartextPassword;
-  /// [timeZone] default = TimeZoneSettings('UTC')
+  /// [timeZone] = default = TimeZoneSettings('UTC') | String 'UTC'
   PgEndpoint({
     required this.host,
     this.port = 5432,
@@ -223,9 +223,13 @@ class PgEndpoint {
     this.isUnixSocket = false,
     this.allowCleartextPassword = false,
     this.encoding = utf8,
-    TimeZoneSettings? timeZone,
+    Object timeZone = 'UTC',
   }){
-    this.timeZone = timeZone ?? TimeZoneSettings('UTC');
+    if (timeZone is String) {
+      this.timeZone = TimeZoneSettings(timeZone);
+    } else if (timeZone is TimeZoneSettings) {
+      this.timeZone = timeZone;
+    }
   }
 }
 
@@ -234,6 +238,7 @@ class PgSessionSettings {
   final Duration? connectTimeout;
   // Duration(minutes: 5)
   final Duration? queryTimeout;
+  /// TimeZoneSettings | String
   final TimeZoneSettings? timeZone;
   final Encoding? encoding;
   final bool Function(X509Certificate)? onBadSslCertificate;

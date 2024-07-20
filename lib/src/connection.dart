@@ -40,7 +40,7 @@ class PostgreSQLConnection extends Object
   /// [timeZone] is the timeZone the connection is in. Defaults to 'UTC'.
   /// [useSSL] when true, uses a secure socket when connecting to a PostgreSQL database.
   /// [allowClearTextPassword] when true, allows sending the password during authentication in clear text. Use only when required by the database server and under encrypted connections, this feature may lead to security issues.
-  /// [timeZone] = default = TimeZoneSettings('UTC')
+  /// [timeZone] = default = TimeZoneSettings('UTC') | String 'UTC'
   PostgreSQLConnection(
     this.host,
     this.port,
@@ -50,13 +50,18 @@ class PostgreSQLConnection extends Object
     this.password,
     this.timeoutInSeconds = 30,
     this.queryTimeoutInSeconds = 30,
-    TimeZoneSettings? timeZone,
+    Object timeZone = 'UTC',
     this.useSSL = false,
     this.isUnixSocket = false,
     this.allowClearTextPassword = false,
     this.replicationMode = ReplicationMode.none,
   }) {
-    this.timeZone = timeZone ?? TimeZoneSettings('UTC');
+    if (timeZone is String) {
+      this.timeZone = TimeZoneSettings(timeZone);
+    } else if (timeZone is TimeZoneSettings) {
+      this.timeZone = timeZone;
+    }
+
     _connectionState = _PostgreSQLConnectionStateClosed();
     _connectionState.connection = this;
   }
