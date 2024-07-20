@@ -8,7 +8,7 @@ void main(List<String> args) async {
   var connection = PostgreSQLConnection(
     'localhost',
     5432,
-    'siamweb',
+    'dart_test',
     username: 'dart',
     password: 'dart',
     encoding: utf8,

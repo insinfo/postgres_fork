@@ -19,7 +19,8 @@ dependencies:
   stack_trace: ^1.11.0
   enough_convert: ^1.6.0
 
-  #timezone: '>=0.9.2 <2.5.0'
+  pg_timezone: ^1.0.0
+    #path: ../pg_timezone
 
 dev_dependencies:
   lints: ^2.0.0

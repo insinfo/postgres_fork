@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
-import 'package:postgres_fork/src/timezone_settings.dart' as tz;
+import 'package:pg_timezone/pg_timezone.dart' as tz;
 
 import '../postgres.dart' show PostgreSQLException;
 import 'types.dart';
