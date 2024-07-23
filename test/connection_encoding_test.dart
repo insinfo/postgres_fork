@@ -78,7 +78,7 @@ $$
 
     expect(results, [
       [       
-        DateTime.parse('2023-08-15 16:07:36.000'),
+        DateTime.parse('2023-08-15 16:07:36.000Z'),
         'City Hall of São Paulo - Brazil'
       ]
     ]);
