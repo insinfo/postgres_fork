@@ -5,6 +5,7 @@ import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 // ignore: directives_ordering
 import 'package:pg_timezone/pg_timezone.dart' as tz;
+import 'package:pg_timezone/timezone.dart' as tzenv;
 
 import '../postgres.dart' show PostgreSQLException;
 import 'types.dart';
@@ -519,7 +520,7 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         if (timeZone.forceDecodeTimestamptzAsUTC) {
           return datetime as T;
         }
-  
+
         final pgTimeZone = timeZone.value.toLowerCase();
         final tzLocations = tz.timeZoneDatabase.locations.entries
             .where((e) {
@@ -535,6 +536,8 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
               'Location with the name "$pgTimeZone" doesn\'t exist');
         }
         final tzLocation = tzLocations.first;
+        //define location for TZDateTime.toLocal()
+        tzenv.setLocalLocation(tzLocation);
 
         final offsetInMilliseconds = tzLocation.currentTimeZone.offset;
         // Conversion of milliseconds to hours

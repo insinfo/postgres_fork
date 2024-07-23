@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.3
+
+- fix init Location By default with UTC 
+
 ## 2.8.2
 
 - add more flexibility on how date, timestamp and timestaptz types are decoded by adding flags to the TimeZoneSettings class
