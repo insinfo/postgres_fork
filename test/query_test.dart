@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
 
@@ -11,6 +13,11 @@ void main() {
     setUp(() async {
       connection = PostgreSQLConnection('localhost', 5432, 'dart_test',
           username: 'dart', password: 'dart');
+      if(Platform.isWindows){
+        connection = PostgreSQLConnection('localhost', 5435, 'dart_test',
+          username: 'dart', password: 'dart');
+      }
+
       await connection.open();
       await connection.execute('CREATE TEMPORARY TABLE t '
           '(i int, s serial, bi bigint, '
@@ -177,8 +184,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3),
         {'a': 'b'},
         '01234567-89ab-cdef-0123-0123456789ab',
@@ -242,8 +249,8 @@ void main() {
             't': 'foobar',
             'f': 5.0,
             'd': 6.0,
-            'dt': DateTime(2000),
-            'ts': DateTime(2000, 2),
+            'dt': DateTime.utc(2000),
+            'ts': DateTime.utc(2000, 2),
             'tsz': DateTime.utc(2000, 3),
             'j': {'key': 'value'},
             'u': '01234567-89ab-cdef-0123-0123456789ab',
@@ -273,8 +280,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3),
         {'key': 'value'},
         '01234567-89ab-cdef-0123-0123456789ab',
@@ -321,8 +328,8 @@ void main() {
             't': 'foobar',
             'f': 5.0,
             'd': 6.0,
-            'dt': DateTime(2000),
-            'ts': DateTime(2000, 2),
+            'dt': DateTime.utc(2000),
+            'ts': DateTime.utc(2000, 2),
             'tsz': DateTime.utc(2000, 3),
           });
 
@@ -336,8 +343,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3)
       ];
       expect(result, [expectedRow]);

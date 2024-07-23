@@ -3,13 +3,12 @@ import 'dart:typed_data';
 
 import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
+// ignore: directives_ordering
 import 'package:pg_timezone/pg_timezone.dart' as tz;
 
 import '../postgres.dart' show PostgreSQLException;
 import 'types.dart';
 import 'v3/types.dart';
-
-
 
 final _bool0 = Uint8List(1)..[0] = 0;
 final _bool1 = Uint8List(1)..[0] = 1;
@@ -477,17 +476,26 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         return buffer.getFloat32(0) as T;
       case PostgreSQLDataType.double:
         return buffer.getFloat64(0) as T;
+      case PostgreSQLDataType.date:
+        final value = buffer.getInt32(0);
+        //infinity || -infinity
+        if (value == 2147483647 || value == -2147483648) {
+          return null;
+        }
+        if (timeZone.forceDecodeDateAsUTC) {
+          return DateTime.utc(2000).add(Duration(days: value)) as T;
+        }
+        return DateTime(2000).add(Duration(days: value)) as T;
       case PostgreSQLDataType.timestampWithoutTimezone:
         final value = buffer.getInt64(0);
         //infinity || -infinity
         if (value == 9223372036854775807 || value == -9223372036854775808) {
           return null;
         }
-
-        //final date = DateTime.utc(2000).add(Duration(microseconds: value));
-        //remove Z from timestamp Without Timezone decode
-        final date = DateTime(2000).add(Duration(microseconds: value));
-        return date as T;
+        if (timeZone.forceDecodeTimestampAsUTC) {
+          return DateTime.utc(2000).add(Duration(microseconds: value)) as T;
+        }
+        return DateTime(2000).add(Duration(microseconds: value)) as T;
 
       case PostgreSQLDataType.timestampWithTimezone:
         final value = buffer.getInt64(0);
@@ -505,12 +513,14 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         // value = 725968771477000 PostgreSQL 8.2.23
         // print(  'PostgresBinaryDecoder timestampWithoutTimezone timeZone ${this.timeZone.value}');
         var datetime = DateTime.utc(2000).add(Duration(microseconds: value));
-        if (this.timeZone.value.toLowerCase() == 'utc') {
+        if (timeZone.value.toLowerCase() == 'utc') {
           return datetime as T;
         }
-
-        //tz.getLocation(this.timeZone.value);
-        final pgTimeZone = this.timeZone.value.toLowerCase();
+        if (timeZone.forceDecodeTimestamptzAsUTC) {
+          return datetime as T;
+        }
+  
+        final pgTimeZone = timeZone.value.toLowerCase();
         final tzLocations = tz.timeZoneDatabase.locations.entries
             .where((e) {
               return (e.key.toLowerCase() == pgTimeZone ||
@@ -564,17 +574,6 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         }
 
         return datetime as T;
-
-      case PostgreSQLDataType.date:
-        final value = buffer.getInt32(0);
-        //infinity || -infinity
-        if (value == 2147483647 || value == -2147483648) {
-          return null;
-        }
-        // final date = DateTime.utc(2000).add(Duration(days: value));
-        //remove Z from timestamp Without Timezone decode
-        final date = DateTime(2000).add(Duration(days: value));
-        return date as T;
 
       case PostgreSQLDataType.interval:
         {

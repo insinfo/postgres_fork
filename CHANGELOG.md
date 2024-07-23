@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.2
+
+- add more flexibility on how timestamp and timestaptz types are decoded by adding flags to the TimeZoneSettings class
+
 ## 2.8.1
 
 - change timezone to external pkg
