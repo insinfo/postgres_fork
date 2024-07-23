@@ -46,8 +46,8 @@ void main() {
         't': 'foobar',
         'f': 5.0,
         'd': 6.0,
-        'dt': DateTime(2000),
-        'ts': DateTime(2000, 2),
+        'dt': DateTime.utc(2000),
+        'ts': DateTime.utc(2000, 2),
         'tsz': DateTime.utc(2000, 3)
       });
 
@@ -63,8 +63,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3)
       ];
       expect(results, [expectedRow1]);
@@ -77,8 +77,8 @@ void main() {
         't': 'barfoo',
         'f': 6.0,
         'd': 7.0,
-        'dt': DateTime(2001),
-        'ts': DateTime(2001, 2),
+        'dt': DateTime.utc(2001),
+        'ts': DateTime.utc(2001, 2),
         'tsz': DateTime.utc(2001, 3)
       });
 
@@ -94,8 +94,8 @@ void main() {
         'barfoo',
         6.0,
         7.0,
-        DateTime(2001),
-        DateTime(2001, 2),
+        DateTime.utc(2001),
+        DateTime.utc(2001, 2),
         DateTime.utc(2001, 3)
       ];
       expect(results, [expectedRow2]);
@@ -141,8 +141,8 @@ void main() {
         't': 'foobar',
         'f': 5.0,
         'd': 6.0,
-        'dt': DateTime(2000),
-        'ts': DateTime(2000, 2),
+        'dt': DateTime.utc(2000),
+        'ts': DateTime.utc(2000, 2),
         'tsz': DateTime.utc(2000, 3)
       });
 
@@ -156,8 +156,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3)
       ];
       expect(results, [expectedRow1]);
@@ -170,8 +170,8 @@ void main() {
         't': 'barfoo',
         'f': 6.0,
         'd': 7.0,
-        'dt': DateTime(2001),
-        'ts': DateTime(2001, 2),
+        'dt': DateTime.utc(2001),
+        'ts': DateTime.utc(2001, 2),
         'tsz': DateTime.utc(2001, 3)
       });
 
@@ -185,8 +185,8 @@ void main() {
         'barfoo',
         6.0,
         7.0,
-        DateTime(2001),
-        DateTime(2001, 2),
+        DateTime.utc(2001),
+        DateTime.utc(2001, 2),
         DateTime.utc(2001, 3)
       ];
       expect(results, [expectedRow2]);
@@ -211,8 +211,8 @@ void main() {
         't': 'foobar',
         'f': 5.0,
         'd': 6.0,
-        'dt': DateTime(2000),
-        'ts': DateTime(2000, 2),
+        'dt': DateTime.utc(2000),
+        'ts': DateTime.utc(2000, 2),
         'tsz': DateTime.utc(2000, 3)
       });
 
@@ -226,8 +226,8 @@ void main() {
         'foobar',
         5.0,
         6.0,
-        DateTime(2000),
-        DateTime(2000, 2),
+        DateTime.utc(2000),
+        DateTime.utc(2000, 2),
         DateTime.utc(2000, 3)
       ];
       expect(results, [expectedRow1]);
@@ -240,8 +240,8 @@ void main() {
         't': 'barfoo',
         'f': 6.0,
         'd': 7.0,
-        'dt': DateTime(2001),
-        'ts': DateTime(2001, 2),
+        'dt': DateTime.utc(2001),
+        'ts': DateTime.utc(2001, 2),
         'tsz': DateTime.utc(2001, 3)
       });
 
@@ -255,8 +255,8 @@ void main() {
         'barfoo',
         6.0,
         7.0,
-        DateTime(2001),
-        DateTime(2001, 2),
+        DateTime.utc(2001),
+        DateTime.utc(2001, 2),
         DateTime.utc(2001, 3)
       ];
       expect(results, [expectedRow2]);
