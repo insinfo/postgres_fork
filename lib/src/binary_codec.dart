@@ -486,7 +486,17 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         if (timeZone.forceDecodeDateAsUTC) {
           return DateTime.utc(2000).add(Duration(days: value)) as T;
         }
-        return DateTime(2000).add(Duration(days: value)) as T;
+
+        // https://github.com/dart-lang/sdk/issues/56312
+        // ignore past timestamp transitions and use only current timestamp in local datetime        
+        final nowDt = DateTime.now();
+        var baseDt = DateTime(2000);
+        if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
+          final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
+          baseDt = baseDt.add(difference);
+        }
+        return baseDt.add(Duration(days: value)) as T;
+
       case PostgreSQLDataType.timestampWithoutTimezone:
         final value = buffer.getInt64(0);
         //infinity || -infinity
@@ -496,7 +506,16 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         if (timeZone.forceDecodeTimestampAsUTC) {
           return DateTime.utc(2000).add(Duration(microseconds: value)) as T;
         }
-        return DateTime(2000).add(Duration(microseconds: value)) as T;
+
+        // https://github.com/dart-lang/sdk/issues/56312
+        // ignore previous timestamp transitions and use only the current system timestamp in local date and time so that the behavior is correct on Windows and Linux
+        final nowDt = DateTime.now();
+        var baseDt = DateTime(2000);
+        if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
+          final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
+          baseDt = baseDt.add(difference);
+        }
+        return baseDt.add(Duration(microseconds: value)) as T;
 
       case PostgreSQLDataType.timestampWithTimezone:
         final value = buffer.getInt64(0);
@@ -505,19 +524,12 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         if (value == 9223372036854775807 || value == -9223372036854775808) {
           return null;
         }
-        // SELECT * FROM pg_authid where rolname ='postgres'
-        // value = 9223372036854775807 PostgreSQL 14 if value is infinity
-        // value = 4739373075810553430 PostgreSQL 8.2.21 bug
-        // value =  725968771477000 PostgreSQL PostgreSQL 15.3
-        // value = 725968771477000 PostgreSQL 14.6
-        // value = 725968771477000 PostgreSQL 8.1.11
-        // value = 725968771477000 PostgreSQL 8.2.23
-        // print(  'PostgresBinaryDecoder timestampWithoutTimezone timeZone ${this.timeZone.value}');
+       
         var datetime = DateTime.utc(2000).add(Duration(microseconds: value));
-        if (timeZone.value.toLowerCase() == 'utc') {
+        if (timeZone.forceDecodeTimestamptzAsUTC) {
           return datetime as T;
         }
-        if (timeZone.forceDecodeTimestamptzAsUTC) {
+        if (timeZone.value.toLowerCase() == 'utc') {
           return datetime as T;
         }
 

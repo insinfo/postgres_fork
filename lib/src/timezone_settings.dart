@@ -1,14 +1,14 @@
 /// A class to configure time zone settings for decoding timestamps and dates.
 class TimeZoneSettings {
   /// The default time zone value.
-  /// 
+  ///
   /// The [value] represents the name of the time zone location. Default is 'UTC'.
   String value = 'UTC';
 
   /// Creates a new instance of [TimeZoneSettings].
-  /// 
+  ///
   /// [value] is the name of the time zone location.
-  /// 
+  ///
   /// The optional named parameters:
   /// - [forceDecodeTimestamptzAsUTC]: if true, decodes timestamps with timezone (timestamptz) as UTC. If false, decodes them using the timezone defined in the connection.
   /// - [forceDecodeTimestampAsUTC]: if true, decodes timestamps without timezone (timestamp) as UTC. If false, decodes them as local datetime.
@@ -31,4 +31,8 @@ class TimeZoneSettings {
   /// If true, decodes the date as UTC.
   /// If false, decodes the date as local datetime.
   bool forceDecodeDateAsUTC = true;
+
+  /// ignore past timestamp transitions and use only current timestamp in local datetime for Timestamp and Date If
+  /// forceDecodeTimestampAsUTC and forceDecodeDateAsUTC is false
+  bool ignorePastTimestampUseCurrent = true;
 }
