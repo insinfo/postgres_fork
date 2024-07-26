@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.4
+
+- fix decode timestamp without timezone as local DateTime, ignore past timezone transitions
+
 ## 2.8.3
 
 - fix init Location By default with UTC 

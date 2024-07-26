@@ -34,5 +34,5 @@ class TimeZoneSettings {
 
   /// ignore past timestamp transitions and use only current timestamp in local datetime for Timestamp and Date If
   /// forceDecodeTimestampAsUTC and forceDecodeDateAsUTC is false
-  bool ignorePastTimestampUseCurrent = true;
+  //bool ignorePastTimestampUseCurrent = true;
 }
