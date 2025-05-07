@@ -7,7 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
 
-const _kContainerName = 'postgres-dart-test';
+const kContainerName = 'postgres-dart-test';
 
 PostgreSQLConnection getNewConnection() {
   return PostgreSQLConnection('localhost', 5432, 'dart_test',
@@ -27,7 +27,7 @@ void usePostgresDocker() {
     //   }
     //   return;
     // }
-    final isRunning = await _isPostgresContainerRunning();
+    final isRunning = await isPostgresContainerRunning();
     if (isRunning) {
       return;
     }
@@ -35,7 +35,7 @@ void usePostgresDocker() {
     final configPath = p.join(Directory.current.path, 'test', 'pg_configs');
 
     final dp = await startPostgres(
-      name: _kContainerName,
+      name: kContainerName,
       imageName: 'postgres',
       version: '14.3',
       pgPort: 5432,
@@ -58,11 +58,11 @@ void usePostgresDocker() {
   });
 
   tearDownAll(() async {
-    await Process.run('docker', ['stop', _kContainerName]);
+    await Process.run('docker', ['stop', kContainerName]);
   });
 }
 
-Future<bool> _isPostgresContainerRunning() async {
+Future<bool> isPostgresContainerRunning() async {
   final pr = await Process.run(
     'docker',
     ['ps', '--format', '{{.Names}}'],
@@ -71,7 +71,7 @@ Future<bool> _isPostgresContainerRunning() async {
       .toString()
       .split('\n')
       .map((s) => s.trim())
-      .contains(_kContainerName);
+      .contains(kContainerName);
 }
 
 Future<void> setupDatabase(DockerProcess dp) async {
@@ -91,7 +91,7 @@ Future<void> setupDatabase(DockerProcess dp) async {
           'Failed to setup PostgreSQL database due to the following error:\n'
           '${res.stderr}';
       throw ProcessException(
-        'docker exec $_kContainerName',
+        'docker exec $kContainerName',
         args,
         message,
         res.exitCode,

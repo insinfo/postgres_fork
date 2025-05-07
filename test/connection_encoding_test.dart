@@ -1,13 +1,46 @@
 //dart test .\test\connection_encoding_test.dart   --concurrency 1 --chain-stack-traces --platform vm
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:docker_process/containers/postgres.dart';
 import 'package:enough_convert/enough_convert.dart';
+import 'package:path/path.dart' as p;
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
+import 'docker.dart';
 
 void main() {
   late PostgreSQLConnection connection;
   setUp(() async {
+    final isRunning = await isPostgresContainerRunning();
+    if (isRunning) {
+      return;
+    }
+
+    final configPath = p.join(Directory.current.path, 'test', 'pg_configs');
+
+    final dp = await startPostgres(
+      name: kContainerName,
+      imageName: 'postgres',
+      version: '14.3',
+      pgPort: 5432,
+      pgDatabase: 'postgres',
+      pgUser: 'postgres',
+      pgPassword: 'postgres',
+      cleanup: true,
+      configurations: [
+        // SSL settings
+        'ssl=on',
+        // The debian image includes a self-signed SSL cert that can be used:
+        'ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem',
+        'ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key',
+      ],
+      pgHbaConfPath: p.join(configPath, 'pg_hba.conf'),
+      postgresqlConfPath: p.join(configPath, 'postgresql.conf'),
+    );
+
+    await setupDatabase(dp);
+
     final startConn = PostgreSQLConnection(
       'localhost',
       5432,
@@ -100,6 +133,7 @@ $$
     } finally {
       await maintenanceConn.close();
     }
+    await Process.run('docker', ['stop', kContainerName]);
   });
 
   test('select varchar encoding win1252', () async {
