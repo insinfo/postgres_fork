@@ -1,4 +1,4 @@
-// ignore_for_file: unawaited_futures
+// ignore_for_file: unawaited_futures, body_might_complete_normally_catch_error
 import 'dart:async';
 
 import 'package:postgres_fork/postgres.dart';
@@ -242,7 +242,8 @@ void main() {
         });
       }).catchError((e) => transactionError = e);
       expect(transactionError, isNotNull);
-      expect(failingQueryError.toString(), contains('invalid input'));
+      expect(transactionError.code, equals('22P02')); 
+      expect(failingQueryError.toString(), contains('22P02'));
       expect(
           pendingQueryError.toString(), contains('failed prior to execution'));
       final total = await conn.query('SELECT id FROM t');
@@ -335,7 +336,9 @@ void main() {
         });
         expect(true, false);
       } on PostgreSQLException catch (e) {
-        expect(e.message, contains('unique constraint'));
+        //print('Is rolled back/executes later query e.code ${e.code}');
+        expect(e.code, equals('23505')); 
+       // expect(e.message, contains('unique constraint'));
       }
 
       final noRows = await conn.query('SELECT id FROM t');

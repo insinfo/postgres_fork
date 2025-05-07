@@ -1,10 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:buffer/buffer.dart';
-
 import 'package:postgres_fork/src/timezone_settings.dart';
-
 import '../messages.dart';
 import 'connection.dart';
 import 'query.dart';
@@ -16,27 +13,32 @@ abstract class ServerMessage extends BaseMessage {}
 class ErrorResponseMessage implements ServerMessage {
   final fields = <ErrorField>[];
 
-  ErrorResponseMessage(Uint8List bytes) {
+  ErrorResponseMessage(Uint8List bytes, Encoding encoding) {
     final reader = ByteDataReader()..add(bytes);
 
     int? identificationToken;
-    StringBuffer? sb;
+    List<int> currentFieldBytes = []; // Para acumular os bytes do campo atual
 
     while (reader.remainingLength > 0) {
       final byte = reader.readUint8();
       if (identificationToken == null) {
         identificationToken = byte;
-        sb = StringBuffer();
+        currentFieldBytes = []; // Começa um novo campo
       } else if (byte == 0) {
-        fields.add(ErrorField(identificationToken, sb.toString()));
-        identificationToken = null;
-        sb = null;
+        // Fim do campo (null terminator)
+        // Decodifica os bytes acumulados para este campo usando o encoding fornecido
+        fields.add(ErrorField(
+            identificationToken, encoding.decode(currentFieldBytes)));
+        identificationToken =
+            null; // Prepara para o próximo token de identificação
       } else {
-        sb!.writeCharCode(byte);
+        currentFieldBytes.add(byte); // Acumula byte do campo atual
       }
     }
-    if (identificationToken != null && sb != null) {
-      fields.add(ErrorField(identificationToken, sb.toString()));
+    // Caso a mensagem termine sem um null terminator para o último campo (improvável com PG)
+    if (identificationToken != null && currentFieldBytes.isNotEmpty) {
+      fields.add(
+          ErrorField(identificationToken, encoding.decode(currentFieldBytes)));
     }
   }
 }
@@ -80,7 +82,7 @@ class ParameterStatusMessage extends ServerMessage {
 
     if (name.toLowerCase() == 'timezone') {
       timeZone.value = value;
-      //print('ParameterStatusMessage ${timeZone.value} ');      
+      //print('ParameterStatusMessage ${timeZone.value} ');
     }
     return ParameterStatusMessage._(name, value);
   }
@@ -119,9 +121,10 @@ class BackendKeyMessage extends ServerMessage {
 class RowDescriptionMessage extends ServerMessage {
   final fieldDescriptions = <FieldDescription>[];
 
-  RowDescriptionMessage(Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone) {
+  RowDescriptionMessage(
+      Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone) {
     final reader = ByteDataReader()..add(bytes);
-    final fieldCount = reader.readInt16();   
+    final fieldCount = reader.readInt16();
 
     for (var i = 0; i < fieldCount; i++) {
       final rowDesc = FieldDescription.read(reader, encoding, timeZone);

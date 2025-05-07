@@ -14,15 +14,12 @@ final _emptyData = Uint8List(0);
 
 typedef _ServerMessageFn = ServerMessage Function(Uint8List data);
 
-
-
-
 class MessageFramer {
   final _reader = ByteDataReader();
   final messageQueue = Queue<ServerMessage>();
   final Encoding encoding;
   TimeZoneSettings timeZone;
-  //, 
+  //,
   MessageFramer(this.encoding, this.timeZone);
 
   _ServerMessageFn? _messageTypeMap(int? msgType) {
@@ -38,7 +35,7 @@ class MessageFramer {
       case 68:
         return DataRowMessage.new;
       case 69:
-        return ErrorResponseMessage.new;
+        return (bytes) => ErrorResponseMessage(bytes, encoding);
       case 75:
         return BackendKeyMessage.new;
       case 82:
@@ -69,7 +66,6 @@ class MessageFramer {
 
   int? _type;
   int _expectedLength = 0;
-  
 
   bool get _hasReadHeader => _type != null;
   bool get _canReadHeader => _reader.remainingLength >= _headerByteSize;

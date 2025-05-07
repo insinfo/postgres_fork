@@ -120,6 +120,7 @@ class StartupMessage extends ClientMessage {
     _databaseName.applyToBuffer(buffer);
 
     buffer.write(UTF8ByteConstants.clientEncoding);
+
     buffer.write(encodingString);
 
     if (_timeZone != null) {

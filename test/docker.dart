@@ -1,13 +1,32 @@
+//C:\MyDartProjects\postgresql-fork\test\docker.dart
+//import 'dart:convert';
 import 'dart:io';
 
 import 'package:docker_process/containers/postgres.dart';
 import 'package:path/path.dart' as p;
+import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
 
 const _kContainerName = 'postgres-dart-test';
 
+PostgreSQLConnection getNewConnection() {
+  return PostgreSQLConnection('localhost', 5432, 'dart_test',
+      username: 'dart',
+      password: 'dart',
+      timeoutInSeconds: 2,
+      queryTimeoutInSeconds: 2);
+}
+
 void usePostgresDocker() {
   setUpAll(() async {
+    // if (Platform.isWindows) {
+    //   for (var stmt in setupDatabaseStatements) {
+    //     final process =
+    //         await Process.start('psql', ['-c', stmt, '-U', 'postgres']);
+    //     await process.stdout.transform(utf8.decoder).forEach(print);
+    //   }
+    //   return;
+    // }
     final isRunning = await _isPostgresContainerRunning();
     if (isRunning) {
       return;
@@ -35,29 +54,7 @@ void usePostgresDocker() {
       postgresqlConfPath: p.join(configPath, 'postgresql.conf'),
     );
 
-    // Setup the database to support all kind of tests
-    // see _setupDatabaseStatements definition for details
-    for (var stmt in _setupDatabaseStatements) {
-      final args = [
-        'psql',
-        '-c',
-        stmt,
-        '-U',
-        'postgres',
-      ];
-      final res = await dp.exec(args);
-      if (res.exitCode != 0) {
-        final message =
-            'Failed to setup PostgreSQL database due to the following error:\n'
-            '${res.stderr}';
-        throw ProcessException(
-          'docker exec $_kContainerName',
-          args,
-          message,
-          res.exitCode,
-        );
-      }
-    }
+    await setupDatabase(dp);
   });
 
   tearDownAll(() async {
@@ -77,10 +74,36 @@ Future<bool> _isPostgresContainerRunning() async {
       .contains(_kContainerName);
 }
 
+Future<void> setupDatabase(DockerProcess dp) async {
+  // Setup the database to support all kind of tests
+  // see _setupDatabaseStatements definition for details
+  for (var stmt in setupDatabaseStatements) {
+    final args = [
+      'psql',
+      '-c',
+      stmt,
+      '-U',
+      'postgres',
+    ];
+    final res = await dp.exec(args);
+    if (res.exitCode != 0) {
+      final message =
+          'Failed to setup PostgreSQL database due to the following error:\n'
+          '${res.stderr}';
+      throw ProcessException(
+        'docker exec $_kContainerName',
+        args,
+        message,
+        res.exitCode,
+      );
+    }
+  }
+}
+
 // This setup supports old and new test
 // This is setup is the same as the one from the old travis ci except for the
 // replication user which is a new addition.
-final _setupDatabaseStatements = <String>[
+final setupDatabaseStatements = <String>[
   // create testing database
   'create database dart_test;',
   // create dart user

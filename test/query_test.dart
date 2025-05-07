@@ -14,7 +14,7 @@ void main() {
       connection = PostgreSQLConnection('localhost', 5432, 'dart_test',
           username: 'dart', password: 'dart');
       if(Platform.isWindows){
-        connection = PostgreSQLConnection('localhost', 5435, 'dart_test',
+        connection = PostgreSQLConnection('localhost', 5432, 'dart_test',
           username: 'dart', password: 'dart');
       }
 

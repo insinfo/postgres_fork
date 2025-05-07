@@ -1,20 +1,19 @@
+//dart test .\test\connection_test.dart   --concurrency 1 --chain-stack-traces --platform vm
 // ignore_for_file: unawaited_futures
 
 import 'dart:async';
 import 'dart:io';
 import 'dart:mirrors';
-
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/test.dart';
-
 import 'docker.dart';
 
 void main() {
   usePostgresDocker();
+
   group('connection state', () {
     test('pre-open failure', () async {
-      final conn = PostgreSQLConnection('localhost', 5432, 'dart_test',
-          username: 'dart', password: 'dart');
+      final conn = getNewConnection();
       await expectLater(
           () => conn.query('SELECT 1;'),
           throwsA(isA<Exception>().having(
@@ -30,8 +29,7 @@ void main() {
     });
 
     test('pre-open failure with transaction', () async {
-      final conn = PostgreSQLConnection('localhost', 5432, 'dart_test',
-          username: 'dart', password: 'dart');
+      final conn = getNewConnection();
       await expectLater(
           () => conn.transaction((_) async {}),
           throwsA(isA<Exception>().having(
@@ -450,7 +448,9 @@ void main() {
         await conn.open();
         expect(true, false);
       } on PostgreSQLException catch (e) {
-        expect(e.message, contains('password authentication failed'));
+        //print('Invalid password reports error, conn is closed, disables conn e ${e.code}');
+        expect(e.code, equals('28P01')); 
+        //expect(e.message, contains('password authentication failed'));
       }
 
       await expectConnectionIsInvalid(conn);
@@ -465,7 +465,9 @@ void main() {
         await conn.open();
         expect(true, false);
       } on PostgreSQLException catch (e) {
-        expect(e.message, contains('password authentication failed'));
+        //print('SSL Invalid password reports error, conn is closed, disables conn e ${e.code}');
+        expect(e.code, equals('28P01')); 
+        //expect(e.message, contains('password authentication failed'));
       }
 
       await expectConnectionIsInvalid(conn);
@@ -482,8 +484,12 @@ void main() {
       try {
         await conn.execute('INSERT INTO t (i) VALUES (1)');
         expect(true, false);
+        // } on PostgreSQLException catch (e) {
+        //   expect(e.message, contains('duplicate key value violates'));
+        // }
+        fail('Deveria ter lançado uma exceção de chave duplicada');
       } on PostgreSQLException catch (e) {
-        expect(e.message, contains('duplicate key value violates'));
+        expect(e.code, equals('23505')); // Verifica o código SQLSTATE
       }
 
       await conn.execute('INSERT INTO t (i) VALUES (2)');

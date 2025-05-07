@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.8.5
+
+- fix decode server Error Response Message
+
 ## 2.8.4
 
 - fix decode timestamp without timezone as local DateTime, ignore past timezone transitions

@@ -1,6 +1,6 @@
 name: postgres_fork
 description: PostgreSQL database driver. Supports statement reuse and binary protocol.
-version: 2.8.4
+version: 2.8.5
 homepage: https://github.com/insinfo/postgres_fork.git
 
 environment:
