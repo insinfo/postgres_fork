@@ -63,7 +63,7 @@ class _TransactionProxy extends Object
     // before finishing !!!!
     if (_queue.isNotEmpty) {
       // ignore the error from this query if there is one, it'll pop up elsewhere
-      await _queue.last.future.catchError((_) {});
+      await _queue.last.future.catchError((_) {return null;});
     }
 
     if (!_hasRolledBack && !_hasFailed) {
@@ -81,7 +81,7 @@ class _TransactionProxy extends Object
     // We'll wrap each query in an error handler here to make sure the query cancellation error
     // is only emitted from the transaction itself.
     for (final q in _queue) {
-      unawaited(q.future.catchError((_) {}));
+      unawaited(q.future.catchError((_) {return null;}));
     }
 
     final err = PostgreSQLException('Query failed prior to execution. '

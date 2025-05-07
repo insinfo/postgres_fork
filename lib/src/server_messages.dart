@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:buffer/buffer.dart';
+import 'package:collection/collection.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 import '../messages.dart';
 import 'connection.dart';
@@ -376,23 +377,43 @@ class UnknownMessage extends ServerMessage {
   }
 
   @override
-  bool operator ==(dynamic other) {
-    if (bytes != null) {
-      if (bytes!.length != other.bytes.length) {
-        return false;
-      }
-      for (var i = 0; i < bytes!.length; i++) {
-        if (bytes![i] != other.bytes[i]) {
-          return false;
-        }
-      }
-    } else {
-      if (other.bytes != null) {
-        return false;
-      }
+  bool operator ==(Object other) {
+    // <-- MUDANÇA AQUI: dynamic para Object
+    // 1. Verificação de identidade e tipo
+    if (identical(this, other)) return true;
+    if (other is! UnknownMessage) {
+      return false; // Garante que 'other' é do tipo correto
     }
-    return code == other.code;
+
+    // 2. Comparação do código
+    if (code != other.code) return false;
+
+    // 3. Comparação dos bytes (usando ListEquality para tratar listas e null)
+    // ListEquality().equals compara corretamente listas e também trata nulls.
+    // (null == null) é true, (list == null) é false, etc.
+    if (!const ListEquality().equals(bytes, other.bytes)) return false;
+
+    // Se chegou até aqui, são iguais
+    return true;
   }
+  //@override
+  // bool operator ==(dynamic other) {
+  //   if (bytes != null) {
+  //     if (bytes!.length != other.bytes.length) {
+  //       return false;
+  //     }
+  //     for (var i = 0; i < bytes!.length; i++) {
+  //       if (bytes![i] != other.bytes[i]) {
+  //         return false;
+  //       }
+  //     }
+  //   } else {
+  //     if (other.bytes != null) {
+  //       return false;
+  //     }
+  //   }
+  //   return code == other.code;
+  // }
 }
 
 class ErrorField {

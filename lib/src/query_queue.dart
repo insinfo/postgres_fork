@@ -57,7 +57,7 @@ class QueryQueue extends ListBase<Query<dynamic>>
   @override
   bool add(Query element) {
     if (_isCancelled) {
-      element.future.catchError((_) {});
+      element.future.catchError((_) { return null;});
       element.completeError(_cancellationException);
       return false;
     }

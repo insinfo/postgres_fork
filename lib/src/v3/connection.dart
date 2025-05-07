@@ -12,7 +12,7 @@ import 'package:stream_channel/stream_channel.dart';
 
 import '../../postgres_v3_experimental.dart';
 import '../auth/auth.dart';
-import '../connection.dart' show PostgreSQLException;
+
 import '../query.dart';
 import 'protocol.dart';
 import 'query_description.dart';
