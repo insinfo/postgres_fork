@@ -30,8 +30,8 @@ class ErrorResponseMessage implements ServerMessage {
         // Decodifica os bytes acumulados para este campo usando o encoding fornecido
         fields.add(ErrorField(
             identificationToken, encoding.decode(currentFieldBytes)));
-        identificationToken =
-            null; // Prepara para o próximo token de identificação
+        // Prepara para o próximo token de identificação
+        identificationToken = null;
       } else {
         currentFieldBytes.add(byte); // Acumula byte do campo atual
       }
@@ -417,7 +417,7 @@ class UnknownMessage extends ServerMessage {
 }
 
 class ErrorField {
-  static const int SeverityIdentifier = 83;
+  static const int SeverityIdentifier = 83; // ASCII para 'S'
   static const int CodeIdentifier = 67;
   static const int MessageIdentifier = 77;
   static const int DetailIdentifier = 68;
@@ -438,6 +438,7 @@ class ErrorField {
   static PostgreSQLSeverity severityFromString(String? str) {
     switch (str) {
       case 'ERROR':
+       case 'ERRO': // Português para ERROR
         return PostgreSQLSeverity.error;
       case 'FATAL':
         return PostgreSQLSeverity.fatal;

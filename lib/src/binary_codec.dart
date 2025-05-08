@@ -549,6 +549,11 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         }
         final tzLocation = tzLocations.first;
         //define location for TZDateTime.toLocal()
+        // TODO rever isso no futuro
+        //Observação: Em Dart, que é majoritariamente single-threaded com event loops, o risco de race conditions clássicas é menor. 
+        //No entanto, se múltiplas conexões PostgreSQL fossem gerenciadas de forma a intercalar operações de decodificação de timestamptz
+        // com diferentes timeZone.value dentro do mesmo isolate e antes que setLocalLocation pudesse ser "resetado" ou considerado, 
+        //poderia haver confusão. É uma prática que geralmente se tenta evitar (modificar estado global).
         tzenv.setLocalLocation(tzLocation);
 
         final offsetInMilliseconds = tzLocation.currentTimeZone.offset;

@@ -13,9 +13,9 @@ void main() {
     setUp(() async {
       connection = PostgreSQLConnection('localhost', 5432, 'dart_test',
           username: 'dart', password: 'dart');
-      if(Platform.isWindows){
+      if (Platform.isWindows) {
         connection = PostgreSQLConnection('localhost', 5432, 'dart_test',
-          username: 'dart', password: 'dart');
+            username: 'dart', password: 'dart');
       }
 
       await connection.open();
@@ -442,7 +442,15 @@ void main() {
         expect(true, false);
       } on PostgreSQLException catch (e) {
         expect(e.severity, PostgreSQLSeverity.error);
-        expect(e.message, contains('null value in column "i2"'));
+        //expect(e.message, contains('null value in column "i2"'));
+        expect(e.code, equals('23502'));  
+        expect(
+          e.message,
+          anyOf(
+            contains('null value in column "i2"'),
+            contains('valor nulo na coluna "i2"'),
+          ),
+        );
       }
     });
 

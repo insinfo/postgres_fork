@@ -16,7 +16,7 @@ class PostgresSaslAuthenticator extends PostgresAuthenticator {
 
   PostgresSaslAuthenticator(
       PostgresAuthConnection connection, this.authenticator, Encoding encoding)
-      : super(connection,encoding);
+      : super(connection, encoding);
 
   @override
   void onMessage(AuthenticationMessage message) {
@@ -28,7 +28,8 @@ class PostgresSaslAuthenticator extends PostgresAuthenticator {
         if (bytesToSend == null) {
           throw PostgreSQLException('KindSASL: No bytes to send');
         }
-        msg = SaslClientFirstMessage(bytesToSend, authenticator.mechanism.name,encoding);
+        msg = SaslClientFirstMessage(
+            bytesToSend, authenticator.mechanism.name, encoding);
         break;
       case AuthenticationMessage.KindSASLContinue:
         final bytesToSend = authenticator.handleMessage(
@@ -53,15 +54,17 @@ class PostgresSaslAuthenticator extends PostgresAuthenticator {
 class SaslClientFirstMessage extends ClientMessage {
   Uint8List bytesToSendToServer;
   String mechanismName;
-    final Encoding _encoding;
+  // ignore: unused_field
+  final Encoding _encoding;
 
-  SaslClientFirstMessage(this.bytesToSendToServer, this.mechanismName,this._encoding);
+  SaslClientFirstMessage(
+      this.bytesToSendToServer, this.mechanismName, this._encoding);
 
   @override
   void applyToBuffer(ByteDataWriter buffer) {
     buffer.writeUint8(ClientMessage.PasswordIdentifier);
-       //TODO verificar se aqui tem que ser ascii em vez do charset padão da conexão
-    final utf8CachedMechanismName = EncodedString(mechanismName,_encoding);
+    //TODO verificar se aqui tem que ser ascii em vez do charset padrão da conexão
+    final utf8CachedMechanismName = EncodedString(mechanismName, utf8);
 
     final msgLength = bytesToSendToServer.length;
     // No Identifier bit + 4 byte counts (for whole length) + mechanism bytes + zero byte + 4 byte counts (for msg length) + msg bytes

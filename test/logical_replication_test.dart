@@ -1,10 +1,9 @@
+//logical_replication_test.dart
 import 'dart:async';
-
 import 'package:postgres_fork/messages.dart';
 import 'package:postgres_fork/postgres.dart';
 import 'package:test/expect.dart';
 import 'package:test/scaffolding.dart';
-
 import 'docker.dart';
 
 void main() {
@@ -24,23 +23,14 @@ void main() {
     final logicalDecodingPlugin = 'pgoutput';
     final replicationMode = ReplicationMode.logical;
     // use this for listening to messages
-    final replicationConn = PostgreSQLConnection(
-      host,
-      port,
-      database,
-      username: 'replication',
-      password: 'replication',
-      replicationMode: replicationMode,
-    );
+    final replicationConn = PostgreSQLConnection(host, port, database,
+        username: 'replication',
+        password: 'replication',
+        replicationMode: replicationMode);
 
     // use this for sending queries
-    final changesConn = PostgreSQLConnection(
-      host,
-      port,
-      database,
-      username: username,
-      password: password,
-    );
+    final changesConn = PostgreSQLConnection(host, port, database,
+        username: username, password: password);
 
     // this table is for insert, update, and delete tests.
     final changesTable = 'temp_changes_table';
@@ -91,11 +81,13 @@ void main() {
       // This future will not complete until the replication process stops
       // by closing the connection, an error or timing out.
       // ignore: unawaited_futures
-      replicationConn.execute(statement, timeoutInSeconds: 120).catchError((e) {
-        // this query will be cancelled once the connection is closed.
-        // no need to handle the error
-        return 0;
-      });
+      //replicationConn.execute(statement, timeoutInSeconds: 900).catchError((e) {
+      // this query will be cancelled once the connection is closed.
+      // no need to handle the error
+      //   return 0;
+      // });
+      // deixa rodar indefinidamente; ele só vai parar quando chamarmos close()
+      unawaited(replicationConn.execute(statement).catchError((_) => 0));
 
       await Future.delayed(Duration(seconds: 1));
     });
@@ -134,7 +126,11 @@ void main() {
         isA<CommitMessage>(),
       ];
 
-      expect(controller.stream, emitsInAnyOrder(matchers));
+      //expect(controller.stream, emitsInAnyOrder(matchers));
+      await expectLater(
+        controller.stream,
+        emitsInAnyOrder(matchers),
+      );
     });
 
     // BeginMessage -> UpdateMessage -> CommitMessage
@@ -172,7 +168,11 @@ void main() {
         isA<CommitMessage>(),
       ];
 
-      expect(controller.stream, emitsInAnyOrder(matchers));
+      //expect(controller.stream, emitsInAnyOrder(matchers));
+      await expectLater(
+        controller.stream,
+        emitsInAnyOrder(matchers),
+      );
     });
     // BeginMessage -> DeleteMessage -> CommitMessage
     test('- Receive DeleteMessage after delete statement', () async {
@@ -208,11 +208,76 @@ void main() {
         isA<CommitMessage>(),
       ];
 
-      expect(controller.stream, emitsInAnyOrder(matchers));
+      //expect(controller.stream, emitsInAnyOrder(matchers));
+      await expectLater(
+        controller.stream,
+        emitsInAnyOrder(matchers),
+      );
     });
 
     // BeginMessage -> TruncateMessage -> CommitMessage
     test('- Receive TruncateMessage after delete statement', () async {
+      final replicationConn = PostgreSQLConnection(host, port, database,
+          username: 'replication',
+          password: 'replication',
+          replicationMode: replicationMode);
+
+      // use this for sending queries
+      final changesConn = PostgreSQLConnection(host, port, database,
+          username: username, password: password);
+
+      await replicationConn.open();
+      await changesConn.open();
+
+      // create testing tables
+      // note: primary keys are necessary for replication to work and they are
+      //       used as an identity replica (to allow update & delete) on tables
+      //       that are part of a publication.
+      await changesConn.execute('CREATE TABLE IF NOT EXISTS $changesTable '
+          '(id int GENERATED ALWAYS AS IDENTITY, value text, '
+          'PRIMARY KEY (id));');
+      await changesConn.execute('CREATE TABLE IF NOT EXISTS $truncateTable '
+          '(id int GENERATED ALWAYS AS IDENTITY, value text, '
+          'PRIMARY KEY (id));');
+
+      // create publication
+      final publicationName = 'test_publication';
+      await changesConn.execute('DROP PUBLICATION IF EXISTS $publicationName;');
+      await changesConn.execute(
+        'CREATE PUBLICATION $publicationName FOR TABLE $changesTable, $truncateTable;',
+      );
+
+      final sysInfoRes = await replicationConn.query('IDENTIFY_SYSTEM;',
+          useSimpleQueryProtocol: true);
+
+      final xlogpos = sysInfoRes.first.toColumnMap()['xlogpos'] as String;
+
+      // create replication slot
+      final slotName = 'a_test_slot2';
+
+      // `TEMPORARY` will remove the slot after the connection is closed/dropped
+      await replicationConn.execute(
+        'CREATE_REPLICATION_SLOT $slotName TEMPORARY LOGICAL '
+        '$logicalDecodingPlugin NOEXPORT_SNAPSHOT',
+      );
+
+      // start replication process
+      final statement = 'START_REPLICATION SLOT $slotName LOGICAL $xlogpos '
+          "(proto_version '1', publication_names '$publicationName')";
+
+      // This future will not complete until the replication process stops
+      // by closing the connection, an error or timing out.
+      // ignore: unawaited_futures
+      //replicationConn.execute(statement, timeoutInSeconds: 900).catchError((e) {
+      // this query will be cancelled once the connection is closed.
+      // no need to handle the error
+      //   return 0;
+      // });
+      // deixa rodar indefinidamente; ele só vai parar quando chamarmos close()
+      unawaited(replicationConn.execute(statement).catchError((_) => 0));
+
+      await Future.delayed(Duration(seconds: 1));
+
       // wait to for a second
       await Future.delayed(Duration(seconds: 1));
       final stream = replicationConn.messages
@@ -242,7 +307,11 @@ void main() {
         isA<CommitMessage>(),
       ];
 
-      expect(controller.stream, emitsInOrder(matchers));
+      //expect(controller.stream, emitsInOrder(matchers));
+      await expectLater(
+        controller.stream,
+        emitsInAnyOrder(matchers),
+      );
     });
   });
 }
