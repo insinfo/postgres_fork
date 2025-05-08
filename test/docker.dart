@@ -37,7 +37,7 @@ void usePostgresDocker({bool enableLogicalReplication = false}) {
     final dp = await startPostgres(
       name: kContainerName,
       imageName: 'postgres',
-      version: '16.3',//'14.3'
+      version: '14.3',//'14.3' '16.3'
       pgPort: 5432,
       pgDatabase: 'postgres',
       pgUser: 'postgres',
