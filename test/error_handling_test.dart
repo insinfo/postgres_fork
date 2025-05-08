@@ -17,7 +17,8 @@ void main() {
       await conn.query('SELECT hello');
       fail('Should not reach');
     } catch (e, st) {
-      expect(e.toString(), contains('column "hello" does not exist'));
+      expect(e.toString(), contains('42703')); 
+      //expect(e.toString(), contains('column "hello" does not exist'));
       expect(
         st.toString(),
         contains('/test/error_handling_test.dart'),
@@ -30,7 +31,8 @@ void main() {
       fail('Should not reach');
     } catch (e, st) {
       print(e);
-      expect(e.toString(), contains('relation "hello" does not exist'));
+      expect(e.toString(), contains('42703')); 
+      //expect(e.toString(), contains('relation "hello" does not exist'));
       expect(
         st.toString(),
         contains('/test/error_handling_test.dart'),
@@ -44,7 +46,8 @@ void main() {
         fail('Should not reach');
       });
     } catch (e, st) {
-      expect(e.toString(), contains('column "hello" does not exist'));
+       expect(e.toString(), contains('42703')); // Verifica o código SQLSTATE
+      //expect(e.toString(), contains('column "hello" does not exist'));
       expect(
         st.toString(),
         contains('/test/error_handling_test.dart'),

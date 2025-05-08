@@ -51,14 +51,14 @@ Future<void> mergeFiles(List<String> directories, String outputFile,
 
 void main() async {
   final  directories = <String>[
-    r'C:\MyDartProjects\postgresql-fork\lib',  
+    r'C:\MyDartProjects\postgresql-fork\',  
   ];
 
   final outputFile =
       r'C:\MyDartProjects\postgresql-fork\scripts\merged_postgresql_fork_code.dart.txt';
 
   try {
-    await mergeFiles(directories, outputFile, extensions: ['.dart']);
+    await mergeFiles(directories, outputFile, extensions: ['.dart','dart.yml']);
   } catch (e) {
     print('Ocorreu um erro: $e');
   }

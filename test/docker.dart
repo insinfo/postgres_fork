@@ -62,7 +62,8 @@ void usePostgresDocker() {
   });
 }
 
-Future<bool> isPostgresContainerRunning() async {
+Future<bool> isPostgresContainerRunning(
+    {String containerName = kContainerName}) async {
   final pr = await Process.run(
     'docker',
     ['ps', '--format', '{{.Names}}'],
@@ -71,7 +72,7 @@ Future<bool> isPostgresContainerRunning() async {
       .toString()
       .split('\n')
       .map((s) => s.trim())
-      .contains(kContainerName);
+      .contains(containerName);
 }
 
 Future<void> setupDatabase(DockerProcess dp) async {
