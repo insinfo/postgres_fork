@@ -533,33 +533,73 @@ void main() {
           equals([32, 69, 39, 92, 92, 39, 39, 39]));
     });
 
+    // test('Encode DateTime', () {
+    //   // Get users current timezone
+    //   final tz = DateTime(2001, 2, 3).timeZoneOffset;
+    //   final tzOffsetDelimiter = '${tz.isNegative ? '-' : '+'}'
+    //       '${tz.abs().inHours.toString().padLeft(2, '0')}'
+    //       ':${(tz.inSeconds % 60).toString().padLeft(2, '0')}';
+
+    //   final pairs = {
+    //     '2001-02-03T00:00:00.000$tzOffsetDelimiter':
+    //         DateTime(2001, DateTime.february, 3),
+    //     '2001-02-03T04:05:06.000$tzOffsetDelimiter':
+    //         DateTime(2001, DateTime.february, 3, 4, 5, 6, 0),
+    //     '2001-02-03T04:05:06.999$tzOffsetDelimiter':
+    //         DateTime(2001, DateTime.february, 3, 4, 5, 6, 999),
+    //     '0010-02-03T04:05:06.123$tzOffsetDelimiter BC':
+    //         DateTime(-10, DateTime.february, 3, 4, 5, 6, 123),
+    //     '0010-02-03T04:05:06.000$tzOffsetDelimiter BC':
+    //         DateTime(-10, DateTime.february, 3, 4, 5, 6, 0),
+    //     '012345-02-03T04:05:06.000$tzOffsetDelimiter BC':
+    //         DateTime(-12345, DateTime.february, 3, 4, 5, 6, 0),
+    //     '012345-02-03T04:05:06.000$tzOffsetDelimiter':
+    //         DateTime(12345, DateTime.february, 3, 4, 5, 6, 0)
+    //   };
+
+    //   pairs.forEach((k, v) {
+    //     expect(encoder.convert(v, escapeStrings: false), "'$k'");
+    //   });
+    // });
+
     test('Encode DateTime', () {
-      // Get users current timezone
-      final tz = DateTime(2001, 2, 3).timeZoneOffset;
-      final tzOffsetDelimiter = '${tz.isNegative ? '-' : '+'}'
-          '${tz.abs().inHours.toString().padLeft(2, '0')}'
-          ':${(tz.inSeconds % 60).toString().padLeft(2, '0')}';
+      // formata o deslocamento do próprio DateTime (–03:00, +02:00, etc.)
+      String tzOffset(DateTime dt) {
+        final off = dt.timeZoneOffset;
+        final sign = off.isNegative ? '-' : '+';
+        final hours = off.abs().inHours.toString().padLeft(2, '0');
+        final mins =
+            ((off.inSeconds.abs() ~/ 60) % 60).toString().padLeft(2, '0');
+        return '$sign$hours:$mins';
+      }
 
-      final pairs = {
-        '2001-02-03T00:00:00.000$tzOffsetDelimiter':
-            DateTime(2001, DateTime.february, 3),
-        '2001-02-03T04:05:06.000$tzOffsetDelimiter':
-            DateTime(2001, DateTime.february, 3, 4, 5, 6, 0),
-        '2001-02-03T04:05:06.999$tzOffsetDelimiter':
-            DateTime(2001, DateTime.february, 3, 4, 5, 6, 999),
-        '0010-02-03T04:05:06.123$tzOffsetDelimiter BC':
-            DateTime(-10, DateTime.february, 3, 4, 5, 6, 123),
-        '0010-02-03T04:05:06.000$tzOffsetDelimiter BC':
-            DateTime(-10, DateTime.february, 3, 4, 5, 6, 0),
-        '012345-02-03T04:05:06.000$tzOffsetDelimiter BC':
-            DateTime(-12345, DateTime.february, 3, 4, 5, 6, 0),
-        '012345-02-03T04:05:06.000$tzOffsetDelimiter':
-            DateTime(12345, DateTime.february, 3, 4, 5, 6, 0)
-      };
+      final dates = <DateTime>[
+        DateTime(2001, 2, 3),
+        DateTime(2001, 2, 3, 4, 5, 6, 0),
+        DateTime(2001, 2, 3, 4, 5, 6, 999),
+        DateTime(-10, 2, 3, 4, 5, 6, 123),
+        DateTime(-10, 2, 3, 4, 5, 6, 0),
+        DateTime(-12345, 2, 3, 4, 5, 6, 0),
+        DateTime(12345, 2, 3, 4, 5, 6, 0),
+      ];
 
-      pairs.forEach((k, v) {
-        expect(encoder.convert(v, escapeStrings: false), "'$k'");
-      });
+      for (final dt in dates) {
+        final offset = tzOffset(dt);
+
+        // largura do ano: ≤9999 → 4 dígitos; >9999 → 6 dígitos (padrão do Postgres)
+        final absYear = dt.year.abs();
+        final yearWidth = absYear > 9999 ? 6 : 4;
+        final yearStr = absYear.toString().padLeft(yearWidth, '0');
+
+        final formatted = '$yearStr-02-03T'
+            '${dt.hour.toString().padLeft(2, "0")}:'
+            '${dt.minute.toString().padLeft(2, "0")}:'
+            '${dt.second.toString().padLeft(2, "0")}.'
+            '${dt.millisecond.toString().padLeft(3, "0")}'
+            '$offset${dt.isBefore(DateTime(0, 1, 1)) ? " BC" : ""}';
+
+        expect(encoder.convert(dt, escapeStrings: false), "'$formatted'");
+      }
     });
 
     test('Encode Double', () {

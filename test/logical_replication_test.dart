@@ -8,7 +8,7 @@ import 'package:test/scaffolding.dart';
 import 'docker.dart';
 
 void main() {
-  usePostgresDocker();
+  usePostgresDocker(enableLogicalReplication: true);
 
   // NOTES:
   // - Two PostgreSQL connections are needed for testing replication.
@@ -56,10 +56,10 @@ void main() {
       // note: primary keys are necessary for replication to work and they are
       //       used as an identity replica (to allow update & delete) on tables
       //       that are part of a publication.
-      await changesConn.execute('create table $changesTable '
+      await changesConn.execute('CREATE TABLE IF NOT EXISTS $changesTable '
           '(id int GENERATED ALWAYS AS IDENTITY, value text, '
           'PRIMARY KEY (id));');
-      await changesConn.execute('create table $truncateTable '
+      await changesConn.execute('CREATE TABLE IF NOT EXISTS $truncateTable '
           '(id int GENERATED ALWAYS AS IDENTITY, value text, '
           'PRIMARY KEY (id));');
 

@@ -17,7 +17,7 @@ PostgreSQLConnection getNewConnection() {
       queryTimeoutInSeconds: 2);
 }
 
-void usePostgresDocker() {
+void usePostgresDocker({bool enableLogicalReplication = false}) {
   setUpAll(() async {
     // if (Platform.isWindows) {
     //   for (var stmt in setupDatabaseStatements) {
@@ -37,7 +37,7 @@ void usePostgresDocker() {
     final dp = await startPostgres(
       name: kContainerName,
       imageName: 'postgres',
-      version: '14.3',
+      version: '16.3',//'14.3'
       pgPort: 5432,
       pgDatabase: 'postgres',
       pgUser: 'postgres',
@@ -49,6 +49,11 @@ void usePostgresDocker() {
         // The debian image includes a self-signed SSL cert that can be used:
         'ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem',
         'ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key',
+        if (enableLogicalReplication) ...[
+          'wal_level=logical',
+          'max_wal_senders=5',
+          'max_replication_slots=5',
+        ]
       ],
       pgHbaConfPath: p.join(configPath, 'pg_hba.conf'),
       postgresqlConfPath: p.join(configPath, 'postgresql.conf'),

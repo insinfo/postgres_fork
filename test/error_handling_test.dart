@@ -4,54 +4,53 @@ import 'package:test/test.dart';
 import 'docker.dart';
 
 void main() {
+  // Sobe o contêiner definido em docker.dart antes de rodar os testes
   usePostgresDocker();
 
   test('Reports stacktrace correctly', () async {
-    final conn = PostgreSQLConnection('localhost', 5432, 'dart_test',
-        username: 'dart', password: 'dart');
+    final conn = PostgreSQLConnection(
+      'localhost',
+      5432,
+      'dart_test',
+      username: 'dart',
+      password: 'dart',
+    );
     await conn.open();
-    addTearDown(() async => conn.close());
+    addTearDown(conn.close);
 
-    // Root connection query
+    //------------------------------------------------------------------
+    // 1) Consulta simples – coluna inexistente → SQLSTATE 42703
+    //------------------------------------------------------------------
     try {
       await conn.query('SELECT hello');
       fail('Should not reach');
     } catch (e, st) {
-      expect(e.toString(), contains('42703')); 
-      //expect(e.toString(), contains('column "hello" does not exist'));
-      expect(
-        st.toString(),
-        contains('/test/error_handling_test.dart'),
-      );
+      expect(e.toString(), contains('42703'));               // coluna
+      expect(st.toString(), contains('/test/error_handling_test.dart'));
     }
 
-    // Root connection execute
+    //------------------------------------------------------------------
+    // 2) Comando execute – tabela inexistente → SQLSTATE 42P01
+    //------------------------------------------------------------------
     try {
       await conn.execute('DELETE FROM hello');
       fail('Should not reach');
     } catch (e, st) {
-      print(e);
-      expect(e.toString(), contains('42703')); 
-      //expect(e.toString(), contains('relation "hello" does not exist'));
-      expect(
-        st.toString(),
-        contains('/test/error_handling_test.dart'),
-      );
+      expect(e.toString(), contains('42P01'));               // relação
+      expect(st.toString(), contains('/test/error_handling_test.dart'));
     }
 
-    // Inside transaction
+    //------------------------------------------------------------------
+    // 3) Dentro de transação – coluna inexistente → SQLSTATE 42703
+    //------------------------------------------------------------------
     try {
-      await conn.transaction((conn) async {
-        await conn.query('SELECT hello');
+      await conn.transaction((ctx) async {
+        await ctx.query('SELECT hello');
         fail('Should not reach');
       });
     } catch (e, st) {
-       expect(e.toString(), contains('42703')); // Verifica o código SQLSTATE
-      //expect(e.toString(), contains('column "hello" does not exist'));
-      expect(
-        st.toString(),
-        contains('/test/error_handling_test.dart'),
-      );
+      expect(e.toString(), contains('42703'));               // coluna
+      expect(st.toString(), contains('/test/error_handling_test.dart'));
     }
   });
 }
