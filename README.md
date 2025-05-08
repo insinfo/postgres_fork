@@ -85,4 +85,4 @@ This library is a fork of [StableKernel's postgres library](https://github.com/s
 
 Please file feature requests and bugs at the [issue tracker][tracker].
 
-[tracker]: https://github.com/isoos/postgresql-dart/issues
+[tracker]: https://github.com/insinfo/postgres_fork/issues
