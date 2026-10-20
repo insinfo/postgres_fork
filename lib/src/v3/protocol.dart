@@ -2,15 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:async/async.dart';
-import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/postgres.dart';
-import 'package:stream_channel/stream_channel.dart';
 
 import '../client_messages.dart';
 import '../message_window.dart';
 import '../server_messages.dart';
 import '../shared_messages.dart';
+import '../utils/buffer.dart';
+import '../utils/stream_channel.dart';
 
 export '../client_messages.dart';
 export '../server_messages.dart';
@@ -35,9 +34,10 @@ class AggregatedClientMessage extends ClientMessage {
 }
 
 StreamChannelTransformer<BaseMessage, List<int>> messageTransformer(
-    Encoding encoding, TimeZoneSettings timeZone) {
+    Encoding encoding, TimeZoneSettings timeZone,
+    [DecodingSettings decoding = const DecodingSettings()]) {
   return StreamChannelTransformer(
-    _readMessages(encoding, timeZone),
+    _readMessages(encoding, timeZone, decoding),
     StreamSinkTransformer.fromHandlers(
       handleData: (message, out) {
         if (message is! ClientMessage) {
@@ -55,10 +55,10 @@ StreamChannelTransformer<BaseMessage, List<int>> messageTransformer(
 }
 
 StreamTransformer<Uint8List, ServerMessage> _readMessages(
-    Encoding encoding, TimeZoneSettings timeZone) {
+    Encoding encoding, TimeZoneSettings timeZone, DecodingSettings decoding) {
   return StreamTransformer.fromBind((rawStream) {
     return Stream.multi((listener) {
-      final framer = MessageFramer(encoding, timeZone);
+      final framer = MessageFramer(encoding, timeZone, decoding, false);
 
       var paused = false;
 

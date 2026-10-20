@@ -2,12 +2,13 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
-import 'package:charcode/ascii.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 
+import 'decoding_settings.dart';
 import 'server_messages.dart';
 import 'shared_messages.dart';
+import 'utils/ascii.dart';
+import 'utils/buffer.dart';
 
 const int _headerByteSize = 5;
 final _emptyData = Uint8List(0);
@@ -19,8 +20,17 @@ class MessageFramer {
   final messageQueue = Queue<ServerMessage>();
   final Encoding encoding;
   TimeZoneSettings timeZone;
-  //,
-  MessageFramer(this.encoding, this.timeZone);
+
+  /// Opções de decodificação dos valores recebidos.
+  final DecodingSettings decoding;
+
+  /// Se true (conexão de replicação), CopyData que começam com `k` ou `w`
+  /// são lidos como mensagens de replicação. Fora do modo de replicação os
+  /// CopyData são sempre dados de COPY e chegam intactos.
+  final bool replication;
+
+  MessageFramer(this.encoding, this.timeZone,
+      [this.decoding = const DecodingSettings(), this.replication = true]);
 
   _ServerMessageFn? _messageTypeMap(int? msgType) {
     switch (msgType) {
@@ -44,7 +54,12 @@ class MessageFramer {
         //_handle_PARAMETER_STATUS
         return (bytes) => ParameterStatusMessage(bytes, encoding, timeZone);
       case 84:
-        return (bytes) => RowDescriptionMessage(bytes, encoding, timeZone);
+        return (bytes) =>
+            RowDescriptionMessage(bytes, encoding, timeZone, decoding);
+      case 71:
+        return CopyInResponseMessage.new;
+      case 72:
+        return CopyOutResponseMessage.new;
       case 87:
         return CopyBothResponseMessage.new;
       case 90:
@@ -101,7 +116,7 @@ class MessageFramer {
 
         // Copy Data message is a wrapper around data stream messages
         // such as replication messages.
-        if (msg is CopyDataMessage) {
+        if (replication && msg is CopyDataMessage) {
           // checks if it's a replication message, otherwise returns given msg
           msg = _extractReplicationMessageIfAny(msg);
         }
@@ -122,6 +137,7 @@ class MessageFramer {
   /// Otherwise, it'll just return the provided [copyData].
   ServerMessage _extractReplicationMessageIfAny(CopyDataMessage copyData) {
     final bytes = copyData.bytes;
+    if (bytes.isEmpty) return copyData;
     final code = bytes.first;
     final data = bytes.sublist(1);
     if (code == ReplicationMessage.primaryKeepAliveIdentifier) {

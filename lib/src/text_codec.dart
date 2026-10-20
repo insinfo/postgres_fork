@@ -43,11 +43,30 @@ class PostgresTextEncoder extends Converter<Object, String> {
       return _encodePoint(input);
     }
 
+    // Tipos com codificação própria (PgInterval, PgTime, PgTimeTz, PgInet e
+    // tipos definidos pela aplicação).
+    if (input is PostgresTextEncodable) {
+      final text = input.toPostgresText();
+      if (!escapeStrings) return text;
+      final literal = _encodeString(text, true);
+      final type = input.postgresTypeName;
+      return type == null ? literal : '$literal::$type';
+    }
+
+    // Uint8List é o tipo Dart de bytea (o decodificador devolve Uint8List):
+    // codifica no formato hexadecimal de entrada do bytea.
+    if (input is Uint8List) {
+      final hex = StringBuffer(r'\x');
+      for (final byte in input) {
+        hex.write(byte.toRadixString(16).padLeft(2, '0'));
+      }
+      final text = hex.toString();
+      return escapeStrings ? '${_encodeString(text, true)}::bytea' : text;
+    }
+
     if (input is List) {
       return _encodeList(input);
     }
-
-    // TODO: use custom type encoders
 
     throw PostgreSQLException("Could not infer type of value '$input'.");
   }
@@ -126,28 +145,22 @@ class PostgresTextEncoder extends Converter<Object, String> {
   }
 
   String _encodeDateTime(DateTime value, {bool isDateOnly = false}) {
-    var string = value.toIso8601String();
+    // Built from the fields: toIso8601String() of a TZDateTime (returned for
+    // non-UTC zones) already ends with its offset, so appending one gave
+    // '...-0300-03:00' and the server rejected it (22009).
+    var string = _iso8601Fields(value);
 
     if (isDateOnly) {
       string = string.split('T').first;
+    } else if (value.isUtc) {
+      string = '${string}Z';
     } else {
-      if (!value.isUtc) {
-        final timezoneHourOffset = value.timeZoneOffset.inHours;
-        final timezoneMinuteOffset = value.timeZoneOffset.inMinutes % 60;
-
-        var hourComponent = timezoneHourOffset.abs().toString().padLeft(2, '0');
-        final minuteComponent =
-            timezoneMinuteOffset.abs().toString().padLeft(2, '0');
-
-        if (timezoneHourOffset >= 0) {
-          hourComponent = '+$hourComponent';
-        } else {
-          hourComponent = '-$hourComponent';
-        }
-
-        final timezoneString = [hourComponent, minuteComponent].join(':');
-        string = [string, timezoneString].join('');
-      }
+      // The sign comes from the whole offset: -00:30 has zero hours.
+      final offset = value.timeZoneOffset.inMinutes;
+      final sign = offset < 0 ? '-' : '+';
+      final hours = (offset.abs() ~/ 60).toString().padLeft(2, '0');
+      final minutes = (offset.abs() % 60).toString().padLeft(2, '0');
+      string = '$string$sign$hours:$minutes';
     }
 
     if (string.substring(0, 1) == '-') {
@@ -157,6 +170,21 @@ class PostgresTextEncoder extends Converter<Object, String> {
     }
 
     return "'$string'";
+  }
+
+  /// `yyyy-MM-ddTHH:mm:ss.mmmuuu` without a zone, years as in
+  /// [DateTime.toIso8601String] (`-0010`; six digits beyond ±9999).
+  static String _iso8601Fields(DateTime value) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final year = value.year;
+    final sign = year < 0 ? '-' : (year > 9999 ? '+' : '');
+    final y = '$sign${year.abs().toString().padLeft(year.abs() > 9999 ? 6 : 4, '0')}';
+    final ms = value.millisecond.toString().padLeft(3, '0');
+    final us = value.microsecond == 0
+        ? ''
+        : value.microsecond.toString().padLeft(3, '0');
+    return '$y-${two(value.month)}-${two(value.day)}T${two(value.hour)}:'
+        '${two(value.minute)}:${two(value.second)}.$ms$us';
   }
 
   String _encodeJSON(dynamic value, bool escapeStrings) {
@@ -247,7 +275,9 @@ class PostgresTextDecoder<T extends Object> extends Converter<Uint8List?, T?> {
       case PgDataType.double:
         return num.parse(asText) as T;
       case PgDataType.boolean:
-        return (asText == 'true') as T;
+        // O formato texto do PostgreSQL é 't'/'f' (antes só 'true' virava
+        // true, então todo booleano do protocolo simples vinha false).
+        return (asText == 't' || asText == 'true') as T;
       default:
         throw UnimplementedError(
             'Text decoding for $_dataType and value $asText');

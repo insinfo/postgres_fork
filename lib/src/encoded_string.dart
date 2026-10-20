@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-import 'package:buffer/buffer.dart';
+import 'utils/buffer.dart';
+
 
 // Old UTF8BackedString utf8_backed_string.dart
 class EncodedString {

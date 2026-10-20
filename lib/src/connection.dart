@@ -6,20 +6,22 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
-import 'package:meta/meta.dart';
 import 'package:postgres_fork/postgres.dart';
 
 import 'auth/auth.dart';
 import 'client_messages.dart';
 import 'message_window.dart';
+import 'pool_core.dart';
 import 'query.dart';
 import 'query_cache.dart';
 import 'query_queue.dart';
 import 'server_messages.dart';
+import 'shared_messages.dart';
+import 'utils/buffer.dart';
 
 part 'connection_fsm.dart';
 part 'exceptions.dart';
+part 'pool.dart';
 part 'transaction_proxy.dart';
 
 /// Instances of this class connect to and communicate with a PostgreSQL database.
@@ -41,6 +43,19 @@ class PostgreSQLConnection extends Object
   /// [useSSL] when true, uses a secure socket when connecting to a PostgreSQL database.
   /// [allowClearTextPassword] when true, allows sending the password during authentication in clear text. Use only when required by the database server and under encrypted connections, this feature may lead to security issues.
   /// [timeZone] = default = TimeZoneSettings('UTC') | String 'UTC'
+  /// [decodingSettings] controls how some types (interval, time, timetz,
+  /// inet and cidr) are decoded; see [DecodingSettings].
+  /// [applicationName] and [startupParameters] are session parameters sent in
+  /// the startup message (for example `search_path` or `statement_timeout`),
+  /// avoiding `SET` commands after connecting.
+  /// [sslMode] chooses how SSL is used (see [PgSslMode]); when null, [useSSL]
+  /// decides as before.
+  /// [cancelQueryOnTimeout] also cancels the query on the server when it
+  /// exceeds its timeout (see [cancelQuery]).
+  /// [maxPreparedStatements] limits the prepared statements kept by this
+  /// connection (least recently used are closed); the server may keep one
+  /// extra statement until the next extended-protocol query. Default: no
+  /// limit.
   PostgreSQLConnection(
     this.host,
     this.port,
@@ -55,7 +70,19 @@ class PostgreSQLConnection extends Object
     this.isUnixSocket = false,
     this.allowClearTextPassword = false,
     this.replicationMode = ReplicationMode.none,
-  }) {
+    this.decodingSettings = const DecodingSettings(),
+    this.applicationName,
+    Map<String, String> startupParameters = const {},
+    this.sslMode,
+    this.cancelQueryOnTimeout = false,
+    int? maxPreparedStatements,
+  })  : startupParameters = Map.unmodifiable(startupParameters),
+        _cache = QueryCache(maxSize: maxPreparedStatements) {
+    if (maxPreparedStatements != null && maxPreparedStatements < 1) {
+      throw ArgumentError.value(maxPreparedStatements, 'maxPreparedStatements',
+          'Must be at least 1');
+    }
+    _checkStartupParameters(this.startupParameters);
     if (timeZone is String) {
       this.timeZone = TimeZoneSettings(timeZone);
     } else if (timeZone is TimeZoneSettings) {
@@ -98,6 +125,45 @@ class PostgreSQLConnection extends Object
 
   /// The timeZone of this connection for date operations that don't specify a timeZone.
   TimeZoneSettings timeZone = TimeZoneSettings('UTC');
+
+  /// How some types (interval, time, timetz, inet and cidr) are decoded.
+  final DecodingSettings decodingSettings;
+
+  /// The `application_name` sent in the startup message, if any.
+  final String? applicationName;
+
+  /// Additional session parameters sent in the startup message.
+  final Map<String, String> startupParameters;
+
+  /// SSL mode. When null, [useSSL] decides: [PgSslMode.require] when true,
+  /// [PgSslMode.disable] when false.
+  final PgSslMode? sslMode;
+
+  /// When true, a query that exceeds its timeout is also cancelled on the
+  /// server with a CancelRequest (see [cancelQuery]). Otherwise (default)
+  /// only the client stops waiting and the server keeps running the query.
+  final bool cancelQueryOnTimeout;
+
+  /// The SSL mode actually used by this connection.
+  PgSslMode get effectiveSslMode =>
+      sslMode ?? (useSSL ? PgSslMode.require : PgSslMode.disable);
+
+  bool _usingSsl = false;
+  bool _hasBackendKey = false;
+
+  /// Um COPY FROM STDIN está esperando um flush do socket (durante o flush
+  /// o socket não aceita close()).
+  bool _copyFlushing = false;
+
+  /// Numeração dos cursores de [queryStream].
+  int _cursorCounter = 0;
+
+  /// All parameters sent in the startup message besides user, database,
+  /// replication, client_encoding and TimeZone.
+  Map<String, String> get _extraStartupParameters => {
+        if (applicationName != null) 'application_name': applicationName!,
+        ...startupParameters,
+      };
 
   /// The processID of this backend.
   int get processID => _processID;
@@ -152,7 +218,7 @@ class PostgreSQLConnection extends Object
   /// Prior to connection, it is the empty map.
   final Map<String, String> settings = {};
 
-  final _cache = QueryCache();
+  final QueryCache _cache;
   final _oidCache = _OidCache();
   Socket? _socket;
   late MessageFramer _framer;
@@ -199,14 +265,33 @@ class PostgreSQLConnection extends Object
             .timeout(Duration(seconds: timeoutInSeconds));
       }
 
-      _framer = MessageFramer(encoding, timeZone);
-      if (useSSL) {
-        _socket =
-            await _upgradeSocketToSSL(_socket!, timeout: timeoutInSeconds);
+      _framer = MessageFramer(encoding, timeZone, decodingSettings,
+          replicationMode != ReplicationMode.none);
+      // ignore: cancel_subscriptions
+      StreamSubscription<Uint8List>? plainSubscription;
+      final mode = effectiveSslMode;
+      if (mode != PgSslMode.disable) {
+        final negotiation = await _negotiateSsl(_socket!, mode,
+            timeout: timeoutInSeconds);
+        if (negotiation.secureSocket != null) {
+          _socket = negotiation.secureSocket;
+          _usingSsl = true;
+        } else {
+          // PgSslMode.prefer e o servidor não aceita SSL: segue sem SSL,
+          // reaproveitando a inscrição já feita no socket.
+          plainSubscription = negotiation.plainSubscription;
+        }
       }
 
       final connectionComplete = Completer();
-      _socket!.listen(_readData, onError: _close, onDone: _close);
+      if (plainSubscription != null) {
+        plainSubscription
+          ..onData(_readData)
+          ..onError(_close)
+          ..onDone(_close);
+      } else {
+        _socket!.listen(_readData, onError: _close, onDone: _close);
+      }
 
       _transitionToState(
           _PostgreSQLConnectionStateSocketConnected(connectionComplete));
@@ -308,10 +393,26 @@ class PostgreSQLConnection extends Object
   }
 
   Future _close([dynamic error, StackTrace? trace]) async {
+    final previousState = _connectionState;
     _connectionState = _PostgreSQLConnectionStateClosed();
+    // As consultas de uma transação em andamento ficam na fila da própria
+    // transação: elas também falham (antes ficavam esperando o timeout).
+    final transaction = switch (previousState) {
+      _PostgreSQLConnectionStateBusy(:final query) => query.transaction,
+      _PostgreSQLConnectionStateReadyInTransaction(:final transaction) =>
+        transaction,
+      _ => null,
+    };
+    if (transaction is _TransactionProxy) {
+      transaction._queue.cancel(error, trace);
+    }
 
     if (_socket != null) {
-      await _socket!.close();
+      if (_copyFlushing) {
+        _socket!.destroy();
+      } else {
+        await _socket!.close();
+      }
     }
     await _notifications.close();
 
@@ -347,11 +448,15 @@ class PostgreSQLConnection extends Object
     }
   }
 
-  Future<Socket> _upgradeSocketToSSL(Socket originalSocket,
-      {int timeout = 30}) {
+  /// Envia um SSLRequest e, conforme a resposta e o [mode], devolve o socket
+  /// seguro ou (apenas em [PgSslMode.prefer]) a inscrição no socket sem SSL.
+  Future<_SslNegotiation> _negotiateSsl(Socket originalSocket, PgSslMode mode,
+      {int timeout = 30}) async {
     final sslCompleter = Completer<int>();
 
-    originalSocket.listen((data) {
+    // ignore: cancel_subscriptions
+    final subscription = originalSocket.listen((data) {
+      if (sslCompleter.isCompleted) return;
       if (data.length != 1) {
         sslCompleter.completeError(PostgreSQLException(
             'Could not initialize SSL connection, received unknown byte stream.'));
@@ -360,29 +465,128 @@ class PostgreSQLConnection extends Object
 
       sslCompleter.complete(data.first);
     },
-        onDone: () => sslCompleter.completeError(PostgreSQLException(
-            'Could not initialize SSL connection, connection closed during handshake.')),
-        onError: sslCompleter.completeError);
+        onDone: () {
+          if (!sslCompleter.isCompleted) {
+            sslCompleter.completeError(PostgreSQLException(
+                'Could not initialize SSL connection, connection closed during handshake.'));
+          }
+        },
+        onError: (Object e, StackTrace st) {
+          if (!sslCompleter.isCompleted) sslCompleter.completeError(e, st);
+        });
 
     final byteBuffer = ByteData(8);
     byteBuffer.setUint32(0, 8);
     byteBuffer.setUint32(4, 80877103);
     originalSocket.add(byteBuffer.buffer.asUint8List());
 
-    return sslCompleter.future
-        .timeout(Duration(seconds: timeout))
-        .then((responseByte) {
-      if (responseByte != 83) {
-        throw PostgreSQLException(
-            'The database server is not accepting SSL connections.');
+    final responseByte =
+        await sslCompleter.future.timeout(Duration(seconds: timeout));
+    if (responseByte != 83) {
+      if (mode == PgSslMode.prefer) {
+        return _SslNegotiation(null, subscription);
       }
+      throw PostgreSQLException(
+          'The database server is not accepting SSL connections.');
+    }
 
-      return SecureSocket.secure(originalSocket,
-              onBadCertificate: (certificate) => true)
-          .timeout(Duration(seconds: timeout));
-    });
+    final secure = await SecureSocket.secure(originalSocket,
+            host: mode == PgSslMode.verifyFull ? host : null,
+            onBadCertificate:
+                mode == PgSslMode.verifyFull ? null : (certificate) => true)
+        .timeout(Duration(seconds: timeout));
+    return _SslNegotiation(secure, null);
+  }
+
+  /// Cancela, no servidor, a consulta em execução nesta conexão (envia um
+  /// CancelRequest por uma conexão separada, como o libpq).
+  ///
+  /// Não faz nada se a conexão estiver fechada. A consulta cancelada falha
+  /// com o SQLSTATE [PgErrorCode.queryCanceled]. Se nenhuma consulta estiver
+  /// em execução quando o pedido chegar ao servidor, ele é ignorado.
+  Future<void> cancelQuery() async {
+    if (isClosed || !_hasBackendKey) return;
+    Socket socket;
+    if (isUnixSocket) {
+      socket = await Socket.connect(
+              InternetAddress(host, type: InternetAddressType.unix), port)
+          .timeout(Duration(seconds: timeoutInSeconds));
+    } else {
+      socket = await Socket.connect(host, port)
+          .timeout(Duration(seconds: timeoutInSeconds));
+    }
+    try {
+      if (_usingSsl) {
+        final negotiation = await _negotiateSsl(socket, effectiveSslMode,
+            timeout: timeoutInSeconds);
+        socket = negotiation.secureSocket ?? socket;
+      }
+      final request = ByteData(16)
+        ..setInt32(0, 16)
+        ..setInt32(4, 80877102)
+        ..setInt32(8, _processID)
+        ..setInt32(12, _secretKey);
+      socket.add(request.buffer.asUint8List());
+      await socket.flush();
+    } finally {
+      socket.destroy();
+    }
+  }
+
+  /// Passa a receber notificações do canal [channel] (`LISTEN`). As
+  /// notificações chegam em [notifications] (ou [notificationsFor]).
+  Future<void> listen(String channel) =>
+      execute('LISTEN ${_quoteIdentifier(channel)}');
+
+  /// Deixa de receber notificações de [channel], ou de todos os canais se
+  /// [channel] for omitido (`UNLISTEN`).
+  Future<void> unlisten([String? channel]) => execute(channel == null
+      ? 'UNLISTEN *'
+      : 'UNLISTEN ${_quoteIdentifier(channel)}');
+
+  /// Envia uma notificação para [channel] (`pg_notify`).
+  Future<void> notify(String channel, [String? payload]) => query(
+      'SELECT pg_notify(@channel:text, @payload:text)',
+      substitutionValues: {'channel': channel, 'payload': payload ?? ''});
+
+  /// Notificações recebidas apenas do canal [channel].
+  Stream<Notification> notificationsFor(String channel) =>
+      notifications.where((n) => n.channel == channel);
+
+}
+
+/// Parâmetros que o driver já envia na mensagem de startup (ou reservados
+/// pelo protocolo) e por isso não podem ser informados em
+/// `startupParameters`.
+const _reservedStartupParameters = {
+  'user',
+  'database',
+  'replication',
+  'client_encoding',
+  'timezone',
+};
+
+void _checkStartupParameters(Map<String, String> parameters) {
+  for (final name in parameters.keys) {
+    final lower = name.toLowerCase();
+    if (_reservedStartupParameters.contains(lower) ||
+        lower.startsWith('_pq_') ||
+        name.isEmpty) {
+      throw ArgumentError.value(name, 'startupParameters',
+          'This parameter is set by the driver (or reserved by the protocol)');
+    }
   }
 }
+
+class _SslNegotiation {
+  final SecureSocket? secureSocket;
+  final StreamSubscription<Uint8List>? plainSubscription;
+
+  _SslNegotiation(this.secureSocket, this.plainSubscription);
+}
+
+String _quoteIdentifier(String identifier) =>
+    '"${identifier.replaceAll('"', '""')}"';
 
 class _TransactionRollbackException implements Exception {
   _TransactionRollbackException(this.reason);
@@ -463,7 +667,7 @@ class _OidCache {
   }
 }
 
-abstract class _PostgreSQLExecutionContextMixin
+abstract mixin class _PostgreSQLExecutionContextMixin
     implements PostgreSQLExecutionContext {
   final _queue = QueryQueue();
 
@@ -585,15 +789,21 @@ abstract class _PostgreSQLExecutionContextMixin
     final result = await _execute(
       fmtString,
       substitutionValues: substitutionValues,
-      timeoutInSeconds: _connection.queryTimeoutInSeconds,
+      // O timeout informado era ignorado (sempre usava o da conexão).
+      timeoutInSeconds: timeoutInSeconds ?? _connection.queryTimeoutInSeconds,
       onlyReturnAffectedRows: true,
       placeholderIdentifier: placeholderIdentifier,
     );
     return result.affectedRowCount;
   }
 
-  // TODO: replace [execute] with [_execute] and remove `useSimpleQueryProtocol`
-  //       from the [query] method in the future major breaking change.
+  /// Executa [fmtString] pelo protocolo simples ("Simple Query Protocol").
+  ///
+  /// É usado por [execute] (que devolve só o número de linhas afetadas) e por
+  /// [query] com `useSimpleQueryProtocol: true` (que devolve as linhas, em
+  /// texto). As duas formas públicas foram mantidas na 3.0.0 porque mudar o
+  /// retorno de [execute] ou remover `useSimpleQueryProtocol` quebraria o
+  /// código que já as usa.
   Future<PostgreSQLResult> _execute(
     String fmtString, {
     dynamic substitutionValues = const <String, dynamic>{},
@@ -609,9 +819,9 @@ abstract class _PostgreSQLExecutionContextMixin
     final query = Query<dynamic>(
       fmtString, substitutionValues, _connection,
       _transaction, StackTrace.current,
+      // useSendSimple escolhe o protocolo simples; onlyReturnAffectedRowCount
+      // apenas descarta as linhas (usado por [execute]).
       useSendSimple: true,
-      // TODO: this could be removed from Query since useSendSimple covers the
-      //       functionality.
       onlyReturnAffectedRowCount: onlyReturnAffectedRows,
       placeholderIdentifier: placeholderIdentifier,
     );
@@ -642,6 +852,125 @@ abstract class _PostgreSQLExecutionContextMixin
   @override
   void cancelTransaction({String? reason});
 
+  /// Executa um `COPY ... FROM STDIN` enviando [data] (no formato indicado
+  /// no próprio comando: texto, CSV ou binário) e devolve o número de linhas
+  /// copiadas.
+  ///
+  /// [sql] é enviado como está (sem placeholders), exceto quando
+  /// [substitutionValues] é informado. Os blocos de [data] são enviados à
+  /// medida que chegam, com controle de fluxo; um bloco não pode ser
+  /// alterado depois de emitido. Se [data] emitir um erro, o COPY é
+  /// abortado no servidor (nada é gravado) e o erro é lançado; a conexão
+  /// continua utilizável. Erros do servidor (por exemplo, uma linha
+  /// inválida) interrompem o envio e são lançados como
+  /// [PostgreSQLException].
+  ///
+  /// O tempo limite ([timeoutInSeconds], ou `queryTimeoutInSeconds` da
+  /// conexão) vale para o COPY inteiro; ao expirar, o COPY é abortado.
+  ///
+  /// Para gravar valores Dart, veja [copyRows].
+  Future<int> copyFrom(String sql, Stream<List<int>> data,
+      {dynamic substitutionValues,
+      PlaceholderIdentifier placeholderIdentifier =
+          PlaceholderIdentifier.atSign,
+      int? timeoutInSeconds}) async {
+    final query = _copyQuery(sql, substitutionValues, placeholderIdentifier)
+      ..copyInData = data;
+    final result = await _enqueue(query,
+        timeoutInSeconds: timeoutInSeconds ?? _connection.queryTimeoutInSeconds);
+    return result.affectedRowCount;
+  }
+
+  /// Executa um `COPY ... TO STDOUT`, entregando a [onData] o conteúdo de
+  /// cada mensagem de dados (no formato texto, uma linha por chamada; veja
+  /// [PgCopy.decodeTextRow]), e devolve o número de linhas copiadas.
+  ///
+  /// Se [onData] lançar uma exceção, os dados restantes são descartados e a
+  /// exceção é lançada ao final do COPY; a conexão continua utilizável.
+  Future<int> copyTo(String sql, void Function(Uint8List data) onData,
+      {dynamic substitutionValues,
+      PlaceholderIdentifier placeholderIdentifier =
+          PlaceholderIdentifier.atSign,
+      int? timeoutInSeconds}) async {
+    final query = _copyQuery(sql, substitutionValues, placeholderIdentifier)
+      ..copyOutHandler = onData;
+    final result = await _enqueue(query,
+        timeoutInSeconds: timeoutInSeconds ?? _connection.queryTimeoutInSeconds);
+    return result.affectedRowCount;
+  }
+
+  /// Insere [rows] em [table] com `COPY ... FROM STDIN` (formato texto),
+  /// muito mais rápido que INSERTs para muitas linhas. Devolve o número de
+  /// linhas inseridas.
+  ///
+  /// [table], [schema] e [columns] são nomes (entre aspas no SQL gerado,
+  /// portanto diferenciam maiúsculas de minúsculas). Cada linha deve ter um
+  /// valor por coluna; os tipos aceitos estão em [PgCopy.encodeTextValue].
+  /// Se uma linha for inválida, nada é inserido.
+  Future<int> copyRows(
+      String table, List<String> columns, Iterable<List<Object?>> rows,
+      {String? schema, int? timeoutInSeconds}) {
+    if (columns.isEmpty) {
+      throw ArgumentError.value(columns, 'columns', 'Must not be empty');
+    }
+    final target = schema == null
+        ? _quoteIdentifier(table)
+        : '${_quoteIdentifier(schema)}.${_quoteIdentifier(table)}';
+    final sql = 'COPY $target (${columns.map(_quoteIdentifier).join(', ')}) '
+        'FROM STDIN';
+    return copyFrom(
+        sql,
+        PgCopy.encodeTextRows(rows,
+            encoding: _connection.encoding, columnCount: columns.length),
+        timeoutInSeconds: timeoutInSeconds);
+  }
+
+  /// Executa [fmtString] (um `SELECT`, `VALUES` ou `TABLE`) com um cursor
+  /// no servidor e entrega as linhas aos poucos, em lotes de [fetchSize]
+  /// (`DECLARE ... CURSOR` e `FETCH`).
+  ///
+  /// O próximo lote só é buscado quando o consumidor do stream pede mais
+  /// dados (respeita pause), então no máximo uns dois lotes ficam na memória,
+  /// mesmo para milhões de linhas. Cancelar a inscrição fecha o cursor. Os
+  /// parâmetros e placeholders funcionam como em [query]; [timeoutInSeconds]
+  /// vale para cada lote.
+  ///
+  /// Na conexão, o cursor roda numa transação própria, que ocupa a conexão
+  /// até o stream terminar ou ser cancelado (as outras consultas esperam).
+  /// Dentro de [PostgreSQLConnection.transaction], o stream deve ser
+  /// consumido antes de o bloco terminar; senão ele recebe um [StateError]
+  /// e o cursor é fechado antes do COMMIT. Um erro numa consulta do cursor
+  /// desfaz a transação, como qualquer outra consulta.
+  Stream<PostgreSQLResultRow> queryStream(
+    String fmtString, {
+    dynamic substitutionValues,
+    PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
+    int fetchSize = 1000,
+    int? timeoutInSeconds,
+  }) {
+    if (fetchSize < 1) {
+      throw ArgumentError.value(fetchSize, 'fetchSize', 'Must be positive');
+    }
+    return _CursorStream(this, fmtString, substitutionValues,
+            placeholderIdentifier, fetchSize, timeoutInSeconds)
+        ._controller
+        .stream;
+  }
+
+  Query<dynamic> _copyQuery(String sql, dynamic substitutionValues,
+      PlaceholderIdentifier placeholderIdentifier) {
+    if (_connection.isClosed) {
+      throw PostgreSQLException(
+          'Attempting to execute query, but connection is not open.');
+    }
+    return Query<dynamic>(sql, substitutionValues ?? const <String, dynamic>{},
+        _connection, _transaction, StackTrace.current,
+        useSendSimple: true,
+        onlyReturnAffectedRowCount: true,
+        placeholderIdentifier: placeholderIdentifier)
+      ..rawStatement = substitutionValues == null;
+  }
+
   Future<QueryResult<T>> _enqueue<T>(Query<T> query,
       {int timeoutInSeconds = 30}) async {
     if (_queue.add(query)) {
@@ -654,6 +983,19 @@ abstract class _PostgreSQLExecutionContextMixin
         _queue.remove(query);
         return result!;
       } catch (e, st) {
+        if (e is TimeoutException) {
+          // Interrompe o envio de dados de um COPY FROM STDIN em andamento.
+          query.abandon();
+        }
+        if (e is TimeoutException && _connection.cancelQueryOnTimeout) {
+          // Só cancela se esta consulta for a que está em execução: se ela
+          // ainda estiver na fila, basta removê-la.
+          final state = _connection._connectionState;
+          if (state is _PostgreSQLConnectionStateBusy &&
+              identical(state.query, query)) {
+            unawaited(_connection.cancelQuery().catchError((_) {}));
+          }
+        }
         _queue.remove(query);
         await _onQueryError(query, e, st);
         rethrow;
@@ -730,5 +1072,214 @@ class _PostgreSQLResultRow extends UnmodifiableListView
       rowMap[col.columnName] = this[i];
     }
     return rowMap;
+  }
+}
+
+/// COPY em qualquer [PostgreSQLExecutionContext] de uma
+/// [PostgreSQLConnection], inclusive o contexto recebido em
+/// [PostgreSQLConnection.transaction]. Os métodos estão documentados em
+/// [PostgreSQLConnection.copyFrom], [PostgreSQLConnection.copyTo] e
+/// [PostgreSQLConnection.copyRows].
+extension PgCopyExecutionContext on PostgreSQLExecutionContext {
+  Future<int> copyFrom(String sql, Stream<List<int>> data,
+      {dynamic substitutionValues,
+      PlaceholderIdentifier placeholderIdentifier =
+          PlaceholderIdentifier.atSign,
+      int? timeoutInSeconds}) {
+    final self = this;
+    if (self is PostgreSQLPool) {
+      return self.copyFrom(sql, data,
+          substitutionValues: substitutionValues,
+          placeholderIdentifier: placeholderIdentifier,
+          timeoutInSeconds: timeoutInSeconds);
+    }
+    return _copyContext.copyFrom(sql, data,
+        substitutionValues: substitutionValues,
+        placeholderIdentifier: placeholderIdentifier,
+        timeoutInSeconds: timeoutInSeconds);
+  }
+
+  Future<int> copyTo(String sql, void Function(Uint8List data) onData,
+      {dynamic substitutionValues,
+      PlaceholderIdentifier placeholderIdentifier =
+          PlaceholderIdentifier.atSign,
+      int? timeoutInSeconds}) {
+    final self = this;
+    if (self is PostgreSQLPool) {
+      return self.copyTo(sql, onData,
+          substitutionValues: substitutionValues,
+          placeholderIdentifier: placeholderIdentifier,
+          timeoutInSeconds: timeoutInSeconds);
+    }
+    return _copyContext.copyTo(sql, onData,
+        substitutionValues: substitutionValues,
+        placeholderIdentifier: placeholderIdentifier,
+        timeoutInSeconds: timeoutInSeconds);
+  }
+
+  Future<int> copyRows(
+      String table, List<String> columns, Iterable<List<Object?>> rows,
+      {String? schema, int? timeoutInSeconds}) {
+    final self = this;
+    if (self is PostgreSQLPool) {
+      return self.copyRows(table, columns, rows,
+          schema: schema, timeoutInSeconds: timeoutInSeconds);
+    }
+    return _copyContext.copyRows(table, columns, rows,
+        schema: schema, timeoutInSeconds: timeoutInSeconds);
+  }
+
+  _PostgreSQLExecutionContextMixin get _copyContext {
+    final self = this;
+    if (self is _PostgreSQLExecutionContextMixin) return self;
+    throw UnsupportedError('COPY is only supported by PostgreSQLConnection, '
+        'its transactions and PostgreSQLPool, not by $runtimeType.');
+  }
+}
+
+/// Stream de linhas de um cursor no servidor (ver
+/// [PostgreSQLConnection.queryStream]).
+class _CursorStream {
+  _CursorStream(this._owner, this._sql, this._substitutionValues,
+      this._placeholderIdentifier, this._fetchSize, this._timeoutInSeconds) {
+    _controller = StreamController<PostgreSQLResultRow>(
+        onListen: _start, onResume: _wake, onCancel: _onCancel);
+  }
+
+  final _PostgreSQLExecutionContextMixin _owner;
+  final String _sql;
+  final dynamic _substitutionValues;
+  final PlaceholderIdentifier _placeholderIdentifier;
+  final int _fetchSize;
+  final int? _timeoutInSeconds;
+
+  late final StreamController<PostgreSQLResultRow> _controller;
+
+  /// Completa quando o cursor foi fechado (ou falhou) e o stream encerrado.
+  final _finished = Completer<void>();
+
+  Completer<void>? _wakeUp;
+  bool _cancelled = false;
+  Object? _abortError;
+
+  void _wake() {
+    final wakeUp = _wakeUp;
+    _wakeUp = null;
+    wakeUp?.complete();
+  }
+
+  Future<void> _onCancel() {
+    _cancelled = true;
+    _wake();
+    return _finished.future;
+  }
+
+  /// Interrompe o stream (a transação está terminando).
+  void _abort(Object error) {
+    _abortError ??= error;
+    _wake();
+  }
+
+  void _finish([Object? error, StackTrace? stackTrace]) {
+    if (_finished.isCompleted) return;
+    if (error != null && !_cancelled) {
+      _controller.addError(error, stackTrace);
+    }
+    unawaited(_controller.close());
+    _finished.complete();
+  }
+
+  void _start() {
+    final owner = _owner;
+    if (owner is _TransactionProxy) {
+      if (owner._isFinished) {
+        _finish(StateError('The transaction has already finished.'));
+        return;
+      }
+      owner._activeStreams.add(this);
+      _fetch(owner).then((_) => _finish(), onError: _finish).whenComplete(
+          () => owner._activeStreams.remove(this));
+    } else {
+      // Na conexão: uma transação só para o cursor.
+      Object? fetchError;
+      StackTrace? fetchStackTrace;
+      (owner as PostgreSQLConnection)
+          .transaction((tx) async {
+            try {
+              await _fetch(tx as _TransactionProxy);
+            } catch (e, st) {
+              fetchError = e;
+              fetchStackTrace = st;
+              rethrow;
+            }
+          })
+          .then((_) => _finish(),
+              onError: (Object e, StackTrace st) =>
+                  _finish(fetchError ?? e, fetchStackTrace ?? st));
+    }
+  }
+
+  Future<void> _fetch(_TransactionProxy tx) async {
+    final name = '"pg_stream_cursor_${tx._connection._cursorCounter++}"';
+    await tx.query('DECLARE $name NO SCROLL CURSOR FOR $_sql',
+        substitutionValues: _substitutionValues,
+        placeholderIdentifier: _placeholderIdentifier,
+        // O statement inclui o nome do cursor: não vale a pena guardar.
+        allowReuse: false,
+        timeoutInSeconds: _timeoutInSeconds);
+    while (!_cancelled && _abortError == null) {
+      if (_controller.isPaused) {
+        final wakeUp = _wakeUp = Completer<void>();
+        await wakeUp.future;
+        continue;
+      }
+      // O FETCH não pode usar o cache de statements: a descrição das colunas
+      // depende do cursor, e o cache é por texto SQL.
+      final rows = await tx.query('FETCH FORWARD $_fetchSize FROM $name',
+          allowReuse: false, timeoutInSeconds: _timeoutInSeconds);
+      for (final row in rows) {
+        _controller.add(row);
+      }
+      if (rows.length < _fetchSize) break;
+    }
+    if (!tx._hasRolledBack && !tx._hasFailed) {
+      await tx.execute('CLOSE $name', timeoutInSeconds: _timeoutInSeconds);
+    }
+    final abortError = _abortError;
+    if (abortError != null) {
+      Error.throwWithStackTrace(abortError, StackTrace.current);
+    }
+  }
+}
+
+/// [queryStream] em qualquer [PostgreSQLExecutionContext] de uma
+/// [PostgreSQLConnection], inclusive o contexto recebido em
+/// [PostgreSQLConnection.transaction] (ver [PostgreSQLConnection.queryStream]).
+extension PgQueryStreamExecutionContext on PostgreSQLExecutionContext {
+  Stream<PostgreSQLResultRow> queryStream(
+    String fmtString, {
+    dynamic substitutionValues,
+    PlaceholderIdentifier placeholderIdentifier = PlaceholderIdentifier.atSign,
+    int fetchSize = 1000,
+    int? timeoutInSeconds,
+  }) {
+    final self = this;
+    if (self is _PostgreSQLExecutionContextMixin) {
+      return self.queryStream(fmtString,
+          substitutionValues: substitutionValues,
+          placeholderIdentifier: placeholderIdentifier,
+          fetchSize: fetchSize,
+          timeoutInSeconds: timeoutInSeconds);
+    }
+    if (self is PostgreSQLPool) {
+      return self.queryStream(fmtString,
+          substitutionValues: substitutionValues,
+          placeholderIdentifier: placeholderIdentifier,
+          fetchSize: fetchSize,
+          timeoutInSeconds: timeoutInSeconds);
+    }
+    throw UnsupportedError('queryStream is only supported by '
+        'PostgreSQLConnection, its transactions and PostgreSQLPool, not by '
+        '$runtimeType.');
   }
 }

@@ -156,6 +156,16 @@ void usePostgresDocker(
   Directory? tempDir; // To store the temporary Dockerfile
 
   setUpAll(() async {
+    // Permite rodar os testes contra um PostgreSQL já em execução em
+    // localhost:5432 (com o banco dart_test e os usuários dart/darttrust/
+    // replication criados por setupDatabaseStatements), sem Docker.
+    if (Platform.environment['POSTGRES_TEST_NO_DOCKER'] == '1') {
+      if (onContainerReady != null) {
+        await onContainerReady();
+      }
+      return;
+    }
+
     // if (Platform.isWindows) {
     //   // for (var stmt in setupDatabaseStatements) {
     //   //   //final process =

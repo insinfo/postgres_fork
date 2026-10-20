@@ -1,9 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
-
 import 'client_messages.dart';
 import 'server_messages.dart';
+import 'utils/buffer.dart';
 
 /// Either a [ServerMessage] or a [ClientMessage].
 abstract class BaseMessage {

@@ -51,7 +51,8 @@ class _PostgreSQLConnectionStateSocketConnected
         connection!.databaseName, connection!.timeZone,
         username: connection!.username,
         replication: connection!.replicationMode,
-        encoding: connection!.encoding);
+        encoding: connection!.encoding,
+        parameters: connection!._extraStartupParameters);
 
     connection!._socket!.add(startupMessage.asBytes());
 
@@ -172,6 +173,7 @@ class _PostgreSQLConnectionStateAuthenticating
     } else if (message is BackendKeyMessage) {
       connection!._processID = message.processID;
       connection!._secretKey = message.secretKey;
+      connection!._hasBackendKey = true;
     } else if (message is ReadyForQueryMessage) {
       if (message.state == ReadyForQueryMessage.StateIdle) {
         return _PostgreSQLConnectionStateIdle(openCompleter: completer);
@@ -208,6 +210,7 @@ class _PostgreSQLConnectionStateAuthenticated
     } else if (message is BackendKeyMessage) {
       connection!._processID = message.processID;
       connection!._secretKey = message.secretKey;
+      connection!._hasBackendKey = true;
     } else if (message is ReadyForQueryMessage) {
       if (message.state == ReadyForQueryMessage.StateIdle) {
         return _PostgreSQLConnectionStateIdle(openCompleter: completer);
@@ -239,13 +242,15 @@ class _PostgreSQLConnectionStateIdle extends _PostgreSQLConnectionState {
 
   _PostgreSQLConnectionState processQuery(Query<dynamic> q) {
     try {
-      if (q.onlyReturnAffectedRowCount || q.useSendSimple) {
+      if (q.useSendSimple) {
         q.sendSimple(connection!._socket!);
         return _PostgreSQLConnectionStateBusy(q);
       }
 
       final cached = connection!._cache[q.statement];
-      q.sendExtended(connection!._socket!, cacheQuery: cached);
+      q.sendExtended(connection!._socket!,
+          cacheQuery: cached,
+          closeStatements: connection!._cache.takePendingCloses());
 
       return _PostgreSQLConnectionStateBusy(q);
     } catch (e, st) {
@@ -282,6 +287,11 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
   PostgreSQLException? returningException;
   int rowsAffected = 0;
 
+  /// Erro ao decodificar uma linha (por exemplo, um tipo não suportado).
+  /// A consulta falha com ele, mas a conexão continua utilizável.
+  Object? decodeError;
+  StackTrace? decodeStackTrace;
+
   @override
   _PostgreSQLConnectionState onErrorResponse(ErrorResponseMessage message) {
     // If we get an error here, then we should eat the rest of the messages
@@ -289,6 +299,8 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
     // We should only report the error once that is done.
     final exception = PostgreSQLException._(message.fields);
     returningException ??= exception;
+    // O servidor encerrou um COPY FROM STDIN em andamento.
+    if (_pumping) _stopPumping();
 
     if (exception.severity == PostgreSQLSeverity.fatal ||
         exception.severity == PostgreSQLSeverity.panic) {
@@ -303,16 +315,30 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
     // We ignore NoData, as it doesn't tell us anything we don't already know
     // or care about.
 
-   
-
     if (message is ReadyForQueryMessage) {
+      if (_pumping) {
+        // Um envio de dados de COPY ainda está em andamento (por exemplo,
+        // esperando um flush): o socket só é liberado para a próxima
+        // consulta quando ele terminar (ver _pumpCopyIn).
+        _deferredReady = message;
+        _stopPumping();
+        return this;
+      }
       if (message.state == ReadyForQueryMessage.StateTransactionError) {
-        query.completeError(returningException!);
+        if (copyError != null) {
+          query.completeError(copyError!, copyStackTrace);
+        } else {
+          query.completeError(returningException!);
+        }
         return _PostgreSQLConnectionStateReadyInTransaction(
             query.transaction as _PostgreSQLExecutionContextMixin);
       }
-      if (returningException != null) {
+      if (copyError != null) {
+        query.completeError(copyError!, copyStackTrace);
+      } else if (returningException != null) {
         query.completeError(returningException!);
+      } else if (decodeError != null) {
+        query.completeError(decodeError!, decodeStackTrace);
       } else {
         query.complete(rowsAffected);
       }
@@ -328,7 +354,16 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
     } else if (message is RowDescriptionMessage) {
       query.fieldDescriptions = message.fieldDescriptions;
     } else if (message is DataRowMessage) {
-      query.addRow(message.values);
+      if (decodeError == null) {
+        try {
+          query.addRow(message.values);
+        } catch (e, st) {
+          // Continua consumindo as mensagens até o ReadyForQuery para manter
+          // a conexão sincronizada; o erro é entregue à consulta no fim.
+          decodeError = e;
+          decodeStackTrace = st;
+        }
+      }
     } else if (message is ParameterDescriptionMessage) {
       final validationException =
           query.validateParameters(message.parameterTypeIDs);
@@ -336,9 +371,166 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
         query.cache = null;
       }
       returningException ??= validationException;
+    } else if (message is CopyInResponseMessage) {
+      _startCopyIn();
+    } else if (message is CopyDataMessage) {
+      _copyOut(message.bytes);
     }
 
     return this;
+  }
+
+  /*
+    COPY
+   */
+
+  /// Faz flush no socket depois de cada bloco deste tamanho, para que um
+  /// COPY grande não acumule todos os dados na memória.
+  static const _copyFlushThreshold = 1 << 20;
+
+  /// Erro do lado do cliente durante um COPY (falha no stream de dados,
+  /// exceção no handler do COPY TO, COPY FROM STDIN sem dados). Tem
+  /// prioridade sobre o erro que o servidor devolve em resposta ao CopyFail.
+  Object? copyError;
+  StackTrace? copyStackTrace;
+
+  bool _pumping = false;
+  bool _stopCopy = false;
+  StreamIterator<List<int>>? _copyIterator;
+  ReadyForQueryMessage? _deferredReady;
+
+  void _startCopyIn() {
+    final data = query.copyInData;
+    if (data == null) {
+      copyError ??= PostgreSQLException(
+          'COPY ... FROM STDIN can only be executed with copyFrom().');
+      _sendCopyEnd(CopyFailMessage(
+          'COPY FROM STDIN without data', connection!.encoding));
+      return;
+    }
+    if (query.isAbandoned) {
+      _sendCopyEnd(
+          CopyFailMessage('COPY canceled by the client', connection!.encoding));
+      return;
+    }
+    _pumping = true;
+    query.onAbandon = _stopPumping;
+    unawaited(_pumpCopyIn(data));
+  }
+
+  void _stopPumping() {
+    _stopCopy = true;
+    // Completa com false um moveNext pendente.
+    _copyIterator?.cancel().catchError((_) {});
+  }
+
+  /// Envia CopyDone ou CopyFail. No protocolo estendido o servidor ignora o
+  /// Sync recebido durante o COPY, então outro Sync é necessário.
+  void _sendCopyEnd(ClientMessage end) {
+    connection!._socket!.add(ClientMessage.aggregateBytes(
+        [end, if (!query.useSendSimple) const SyncMessage()]));
+  }
+
+  Future<void> _pumpCopyIn(Stream<List<int>> data) async {
+    final conn = connection!;
+    final socket = conn._socket!;
+    final iterator = _copyIterator = StreamIterator(data);
+    Object? streamError;
+    StackTrace? streamStackTrace;
+    var socketFailed = false;
+    var pending = 0;
+    try {
+      while (!_stopCopy) {
+        bool hasNext;
+        try {
+          hasNext = await iterator.moveNext();
+        } catch (e, st) {
+          streamError = e;
+          streamStackTrace = st;
+          break;
+        }
+        if (!hasNext || _stopCopy) break;
+        if (!identical(conn._connectionState, this)) {
+          socketFailed = true;
+          break;
+        }
+        final chunk = iterator.current;
+        if (chunk.isEmpty) continue;
+        try {
+          final header = ByteData(5)
+            ..setUint8(0, SharedMessages.copyDataIdentifier)
+            ..setInt32(1, chunk.length + 4);
+          socket.add(header.buffer.asUint8List());
+          socket.add(chunk);
+          pending += chunk.length;
+          if (pending >= _copyFlushThreshold) {
+            pending = 0;
+            conn._copyFlushing = true;
+            try {
+              await socket.flush();
+            } finally {
+              conn._copyFlushing = false;
+            }
+          }
+        } catch (_) {
+          socketFailed = true;
+          break;
+        }
+      }
+    } finally {
+      _pumping = false;
+      _copyIterator = null;
+      query.onAbandon = null;
+      unawaited(iterator.cancel().catchError((_) {}));
+    }
+
+    if (!socketFailed && identical(conn._connectionState, this)) {
+      // Depois de um erro do servidor o COPY já terminou e o que fosse
+      // enviado seria descartado.
+      final serverEnded = returningException != null || _deferredReady != null;
+      try {
+        if (streamError != null) {
+          copyError ??= streamError;
+          copyStackTrace ??= streamStackTrace;
+          if (!serverEnded) {
+            _sendCopyEnd(
+                CopyFailMessage('COPY data stream failed', conn.encoding));
+          }
+        } else if (_stopCopy) {
+          if (!serverEnded) {
+            _sendCopyEnd(
+                CopyFailMessage('COPY canceled by the client', conn.encoding));
+          }
+        } else {
+          _sendCopyEnd(CopyDoneMessage(4));
+        }
+      } catch (_) {
+        // Socket fechado: a conexão é encerrada pelo onError/onDone.
+      }
+    }
+
+    final ready = _deferredReady;
+    if (ready != null && identical(conn._connectionState, this)) {
+      _deferredReady = null;
+      try {
+        conn._transitionToState(onMessage(ready));
+      } catch (e, st) {
+        unawaited(conn._close(e, st));
+      }
+    }
+  }
+
+  void _copyOut(Uint8List bytes) {
+    final handler = query.copyOutHandler;
+    if (handler == null || copyError != null || query.isAbandoned) return;
+    try {
+      handler(bytes);
+    } catch (e, st) {
+      // Continua consumindo os dados até o fim do COPY; o erro é entregue à
+      // consulta no ReadyForQuery.
+      copyError = e;
+      copyStackTrace = st;
+    }
   }
 }
 
@@ -367,13 +559,15 @@ class _PostgreSQLConnectionStateReadyInTransaction
 
   _PostgreSQLConnectionState processQuery(Query<dynamic> q) {
     try {
-      if (q.onlyReturnAffectedRowCount || q.useSendSimple) {
+      if (q.useSendSimple) {
         q.sendSimple(connection!._socket!);
         return _PostgreSQLConnectionStateBusy(q);
       }
 
       final cached = connection!._cache[q.statement];
-      q.sendExtended(connection!._socket!, cacheQuery: cached);
+      q.sendExtended(connection!._socket!,
+          cacheQuery: cached,
+          closeStatements: connection!._cache.takePendingCloses());
 
       return _PostgreSQLConnectionStateBusy(q);
     } catch (e, st) {

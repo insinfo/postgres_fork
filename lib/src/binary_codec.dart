@@ -1,14 +1,15 @@
 import 'dart:convert';
+import 'dart:io' show InternetAddress;
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
-// ignore: directives_ordering
-import 'package:pg_timezone/pg_timezone.dart' as tz;
-import 'package:pg_timezone/timezone.dart' as tzenv;
 
-import '../postgres.dart' show PostgreSQLException;
+import 'decimal.dart';
+import 'decoding_settings.dart';
+import 'pg_values.dart';
+import 'timezone/timestamptz.dart';
 import 'types.dart';
+import 'utils/buffer.dart';
 import 'v3/types.dart';
 
 final _bool0 = Uint8List(1)..[0] = 0;
@@ -166,14 +167,24 @@ class PostgresBinaryEncoder<T extends Object>
             // ignoring the second 8 bytes
             return bd.buffer.asUint8List();
           }
+          if (input is PgInterval) {
+            final bd = ByteData(16);
+            bd.setInt64(0, input.microseconds);
+            bd.setInt32(8, input.days);
+            bd.setInt32(12, input.months);
+            return bd.buffer.asUint8List();
+          }
           throw FormatException(
-              'Invalid type for parameter value. Expected: Duration Got: ${input.runtimeType}');
+              'Invalid type for parameter value. Expected: Duration or PgInterval Got: ${input.runtimeType}');
         }
 
       case PgDataType.numeric:
         {
           Object source = input;
 
+          if (source is PgDecimal) {
+            return encodePgDecimal(source);
+          }
           if (source is double || source is int) {
             source = input.toString();
           }
@@ -181,7 +192,7 @@ class PostgresBinaryEncoder<T extends Object>
             return _encodeNumeric(source);
           }
           throw FormatException(
-              'Invalid type for parameter value. Expected: String|double|int Got: ${input.runtimeType}');
+              'Invalid type for parameter value. Expected: String|double|int|PgDecimal Got: ${input.runtimeType}');
         }
 
       case PgDataType.jsonb:
@@ -333,9 +344,6 @@ class PostgresBinaryEncoder<T extends Object>
           throw FormatException(
               'Invalid type for parameter value. Expected: List<Object> Got: ${input.runtimeType}');
         }
-
-      default:
-        throw PostgreSQLException('Unsupported datatype');
     }
   }
 
@@ -366,7 +374,11 @@ class PostgresBinaryEncoder<T extends Object>
   Uint8List _encodeNumeric(String value) {
     value = value.trim();
     var signByte = 0x0000;
-    if (value.toLowerCase() == 'nan') {
+    final lower = value.toLowerCase();
+    if (lower == 'infinity' || lower == '+infinity' || lower == '-infinity') {
+      return encodePgDecimal(PgDecimal.parse(lower));
+    }
+    if (lower == 'nan') {
       signByte = 0xc000;
       value = '';
     } else if (value.startsWith('-')) {
@@ -440,12 +452,115 @@ class PostgresBinaryEncoder<T extends Object>
   }
 }
 
+/// Representação binária (`numeric_send`) de [value].
+Uint8List encodePgDecimal(PgDecimal value) {
+  final writer = ByteDataWriter();
+  if (!value.isFinite) {
+    writer
+      ..writeInt16(0)
+      ..writeInt16(0)
+      ..writeUint16(value.isNaN
+          ? 0xC000
+          : value.isNegative
+              ? 0xF000
+              : 0xD000)
+      ..writeInt16(0);
+    return writer.toBytes();
+  }
+  final scale = value.scale;
+  final unscaled = value.unscaledValue;
+  if (unscaled == BigInt.zero) {
+    writer
+      ..writeInt16(0)
+      ..writeInt16(0)
+      ..writeUint16(0)
+      ..writeInt16(scale);
+    return writer.toBytes();
+  }
+  // Alinha a parte fracionária em grupos de 4 dígitos (base 10000).
+  final scale4 = (scale + 3) ~/ 4 * 4;
+  var text = unscaled.abs().toString() + '0' * (scale4 - scale);
+  final pad = (4 - text.length % 4) % 4;
+  text = '0' * pad + text;
+  final groups = <int>[
+    for (var i = 0; i < text.length; i += 4) int.parse(text.substring(i, i + 4))
+  ];
+  final weight = groups.length - 1 - scale4 ~/ 4;
+  var count = groups.length;
+  while (count > 0 && groups[count - 1] == 0) {
+    count--;
+  }
+  writer
+    ..writeInt16(count)
+    ..writeInt16(weight)
+    ..writeUint16(unscaled.isNegative ? 0x4000 : 0)
+    ..writeInt16(scale);
+  for (var i = 0; i < count; i++) {
+    writer.writeInt16(groups[i]);
+  }
+  return writer.toBytes();
+}
+
+/// Lê a representação binária (`numeric_send`) de um `numeric`.
+PgDecimal decodePgDecimal(Uint8List value) {
+  final data = ByteData.view(value.buffer, value.offsetInBytes, value.length);
+  final count = data.getInt16(0);
+  final weight = data.getInt16(2);
+  final sign = data.getUint16(4);
+  final scale = data.getInt16(6);
+  switch (sign) {
+    case 0xC000:
+      return PgDecimal.nan;
+    case 0xD000:
+      return PgDecimal.infinity;
+    case 0xF000:
+      return PgDecimal.negativeInfinity;
+  }
+  // N = dígitos na base 10000; valor = N × 10^exponent.
+  BigInt n;
+  if (count <= 4) {
+    var small = 0;
+    for (var i = 0; i < count; i++) {
+      small = small * 10000 + data.getInt16(8 + 2 * i);
+    }
+    n = BigInt.from(small);
+  } else {
+    final buffer = StringBuffer();
+    for (var i = 0; i < count; i++) {
+      final digit = data.getInt16(8 + 2 * i).toString();
+      buffer.write(i == 0 ? digit : digit.padLeft(4, '0'));
+    }
+    n = BigInt.parse(buffer.toString());
+  }
+  if (sign == 0x4000) n = -n;
+  final exponent = 4 * (weight - count + 1);
+  // unscaled = N × 10^(exponent + scale)
+  final shift = exponent + scale;
+  if (shift >= 0) {
+    return PgDecimal.fromBigInt(n * BigInt.from(10).pow(shift), scale: scale);
+  }
+  final divisor = BigInt.from(10).pow(-shift);
+  if (n.remainder(divisor) == BigInt.zero) {
+    return PgDecimal.fromBigInt(n ~/ divisor, scale: scale);
+  }
+  // Dígitos além da escala informada (não enviados pelo PostgreSQL):
+  // preserva o valor exato.
+  return PgDecimal.fromBigInt(n, scale: -exponent);
+}
+
 class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
-  const PostgresBinaryDecoder(this.typeCode, this.encoding, this.timeZone);
+  const PostgresBinaryDecoder(this.typeCode, this.encoding, this.timeZone,
+      {this.decoding = const DecodingSettings()});
 
   final int typeCode;
   final Encoding encoding;
   final TimeZoneSettings timeZone;
+  final DecodingSettings decoding;
+
+  /// Indica se o tipo [oid] é decodificado diretamente pelo OID (time,
+  /// timetz, inet, cidr e arrays).
+  static bool decodesByOid(int oid) =>
+      _extendedOids.contains(oid) || _arrayTypes.containsKey(oid);
 
   @override
   T? convert(Uint8List? input) {
@@ -483,6 +598,10 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         if (value == 2147483647 || value == -2147483648) {
           return null;
         }
+        if (decoding.timestamp == TimestampDecoding.localWallClock) {
+          final utc = DateTime.utc(2000).add(Duration(days: value));
+          return DateTime(utc.year, utc.month, utc.day) as T;
+        }
         if (timeZone.forceDecodeDateAsUTC) {
           return DateTime.utc(2000).add(Duration(days: value)) as T;
         }
@@ -502,6 +621,11 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         //infinity || -infinity
         if (value == 9223372036854775807 || value == -9223372036854775808) {
           return null;
+        }
+        if (decoding.timestamp == TimestampDecoding.localWallClock) {
+          final utc = DateTime.utc(2000).add(Duration(microseconds: value));
+          return DateTime(utc.year, utc.month, utc.day, utc.hour, utc.minute,
+              utc.second, utc.millisecond, utc.microsecond) as T;
         }
         if (timeZone.forceDecodeTimestampAsUTC) {
           return DateTime.utc(2000).add(Duration(microseconds: value)) as T;
@@ -525,83 +649,33 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
           return null;
         }
        
-        var datetime = DateTime.utc(2000).add(Duration(microseconds: value));
-        if (timeZone.forceDecodeTimestamptzAsUTC) {
-          return datetime as T;
-        }
-        if (timeZone.value.toLowerCase() == 'utc') {
-          return datetime as T;
-        }
-
-        final pgTimeZone = timeZone.value.toLowerCase();
-        final tzLocations = tz.timeZoneDatabase.locations.entries
-            .where((e) {
-              return (e.key.toLowerCase() == pgTimeZone ||
-                  e.value.currentTimeZone.abbreviation.toLowerCase() ==
-                      pgTimeZone);
-            })
-            .map((e) => e.value)
-            .toList();
-
-        if (tzLocations.isEmpty) {
-          throw tz.LocationNotFoundException(
-              'Location with the name "$pgTimeZone" doesn\'t exist');
-        }
-        final tzLocation = tzLocations.first;
-        //define location for TZDateTime.toLocal()
-        // TODO rever isso no futuro
-        //Observação: Em Dart, que é majoritariamente single-threaded com event loops, o risco de race conditions clássicas é menor. 
-        //No entanto, se múltiplas conexões PostgreSQL fossem gerenciadas de forma a intercalar operações de decodificação de timestamptz
-        // com diferentes timeZone.value dentro do mesmo isolate e antes que setLocalLocation pudesse ser "resetado" ou considerado, 
-        //poderia haver confusão. É uma prática que geralmente se tenta evitar (modificar estado global).
-        tzenv.setLocalLocation(tzLocation);
-
-        final offsetInMilliseconds = tzLocation.currentTimeZone.offset;
-        // Conversion of milliseconds to hours
-        final double offset = offsetInMilliseconds / (1000 * 60 * 60);
-
-        if (offset < 0) {
-          final subtr = Duration(
-              hours: offset.abs().truncate(),
-              minutes: ((offset.abs() % 1) * 60).round());
-          datetime = datetime.subtract(subtr);
-          final specificDate = tz.TZDateTime(
-              tzLocation,
-              datetime.year,
-              datetime.month,
-              datetime.day,
-              datetime.hour,
-              datetime.minute,
-              datetime.second,
-              datetime.millisecond,
-              datetime.microsecond);
-          return specificDate as T;
-        } else if (offset > 0) {
-          final addr = Duration(
-              hours: offset.truncate(), minutes: ((offset % 1) * 60).round());
-          datetime = datetime.add(addr);
-          final specificDate = tz.TZDateTime(
-              tzLocation,
-              datetime.year,
-              datetime.month,
-              datetime.day,
-              datetime.hour,
-              datetime.minute,
-              datetime.second,
-              datetime.millisecond,
-              datetime.microsecond);
-          return specificDate as T;
-        }
-
-        return datetime as T;
+        final datetime = DateTime.utc(2000).add(Duration(microseconds: value));
+        return convertTimestamptz(datetime, timeZone) as T;
 
       case PostgreSQLDataType.interval:
         {
-          if (buffer.getInt64(8) != 0) throw UnimplementedError();
-          return Duration(microseconds: buffer.getInt64(0)) as T;
+          final microseconds = buffer.getInt64(0);
+          final days = buffer.getInt32(8);
+          final months = buffer.getInt32(12);
+          if (decoding.interval == IntervalDecoding.pgInterval) {
+            return PgInterval(
+                months: months, days: days, microseconds: microseconds) as T;
+          }
+          if (days != 0 || months != 0) {
+            final value = PgInterval(
+                months: months, days: days, microseconds: microseconds);
+            throw UnimplementedError(
+                'The interval "$value" has months or days and cannot be '
+                'decoded as a Duration. Use DecodingSettings(interval: '
+                'IntervalDecoding.pgInterval) to decode it as a PgInterval.');
+          }
+          return Duration(microseconds: microseconds) as T;
         }
 
       case PostgreSQLDataType.numeric:
+        if (decoding.numeric == NumericDecoding.decimal) {
+          return decodePgDecimal(input) as T;
+        }
         return _decodeNumeric(input) as T;
 
       case PostgreSQLDataType.jsonb:
@@ -641,36 +715,38 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
       case PostgreSQLDataType.point:
         return PgPoint(buffer.getFloat64(0), buffer.getFloat64(8)) as T;
 
+      // Arrays de tipos primitivos: leitura direta do buffer (caminho rápido).
       case PostgreSQLDataType.booleanArray:
-        return readListBytes<bool>(
-            input, (reader, _) => reader.readUint8() != 0) as T;
-
+        return _readPrimitiveArray<bool>(
+            input, 16, (reader, _) => reader.readUint8() != 0) as T;
       case PostgreSQLDataType.integerArray:
-        return readListBytes<int>(input, (reader, _) => reader.readInt32())
-            as T;
+        return _readPrimitiveArray<int>(
+            input, 23, (reader, _) => reader.readInt32()) as T;
       case PostgreSQLDataType.bigIntegerArray:
-        return readListBytes<int>(input, (reader, _) => reader.readInt64())
-            as T;
-
-      case PostgreSQLDataType.varCharArray:
+        return _readPrimitiveArray<int>(
+            input, 20, (reader, _) => reader.readInt64()) as T;
       case PostgreSQLDataType.textArray:
-        return readListBytes<String>(input, (reader, length) {
-          return encoding.decode(length > 0 ? reader.read(length) : []);
-        }) as T;
-
+        return _readPrimitiveArray<String>(input, 25,
+            (reader, length) => encoding.decode(reader.read(length))) as T;
+      case PostgreSQLDataType.varCharArray:
+        return _readPrimitiveArray<String>(input, 1043,
+            (reader, length) => encoding.decode(reader.read(length))) as T;
       case PostgreSQLDataType.doubleArray:
-        return readListBytes<double>(input, (reader, _) => reader.readFloat64())
-            as T;
-
+        return _readPrimitiveArray<double>(
+            input, 701, (reader, _) => reader.readFloat64()) as T;
       case PostgreSQLDataType.jsonbArray:
-        return readListBytes<dynamic>(input, (reader, length) {
+        return _readPrimitiveArray<dynamic>(input, 3802, (reader, length) {
           reader.read(1);
-          final bytes = reader.read(length - 1);
-          return json.decode(encoding.decode(bytes));
+          return json.decode(encoding.decode(reader.read(length - 1)));
         }) as T;
 
       default:
         {
+          // Tipos sem entrada em PostgreSQLDataType (time, timetz, inet,
+          // cidr) e os demais arrays.
+          final extended = _decodeByOid(input);
+          if (!identical(extended, _notHandled)) return extended as T?;
+
           // We'll try and decode this as a utf8 string and return that
           // for many internal types, this is valid. If it fails,
           // we just return the bytes and let the caller figure out what to
@@ -684,26 +760,133 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
     }
   }
 
-  List<V> readListBytes<V>(Uint8List data,
-      V Function(ByteDataReader reader, int length) valueDecoder) {
-    if (data.length < 16) {
-      return [];
+  /// Decodifica os tipos identificados diretamente pelo OID: `time`,
+  /// `timetz`, `inet`, `cidr` e os arrays. Devolve [_notHandled] para os
+  /// demais tipos.
+  Object? _decodeByOid(Uint8List input) {
+    switch (typeCode) {
+      case _timeOid:
+      case _timeTzOid:
+      case _inetOid:
+      case _cidrOid:
+        return _decodeExtended(input);
     }
+    if (typeCode == _numericArrayOid &&
+        decoding.numeric == NumericDecoding.decimal) {
+      return _readArray<PgDecimal>(input, 1700);
+    }
+    final array = _arrayTypes[typeCode];
+    if (array == null) return _notHandled;
+    if (_extendedOids.contains(array.elementOid) &&
+        decoding.extendedTypes == ExtendedTypeDecoding.bytes) {
+      return input;
+    }
+    return array.read(this, input);
+  }
 
+  Object _decodeExtended(Uint8List input) {
+    if (decoding.extendedTypes == ExtendedTypeDecoding.bytes) return input;
+    final buffer =
+        ByteData.view(input.buffer, input.offsetInBytes, input.lengthInBytes);
+    final Object value;
+    switch (typeCode) {
+      case _timeOid:
+        value = PgTime.fromMicroseconds(buffer.getInt64(0));
+        break;
+      case _timeTzOid:
+        // O PostgreSQL envia o fuso em segundos a oeste de UTC.
+        value = PgTimeTz(
+            PgTime.fromMicroseconds(buffer.getInt64(0)), -buffer.getInt32(8));
+        break;
+      default: // inet e cidr
+        final bits = buffer.getUint8(1);
+        final isCidr = buffer.getUint8(2) != 0;
+        final length = buffer.getUint8(3);
+        final address = InternetAddress.fromRawAddress(
+            Uint8List.fromList(input.sublist(4, 4 + length)));
+        value = PgInet(address, bits, isCidr: isCidr);
+    }
+    return decoding.extendedTypes == ExtendedTypeDecoding.text
+        ? value.toString()
+        : value;
+  }
+
+  /// Lê um array unidimensional de um tipo primitivo diretamente do buffer,
+  /// sem criar um decodificador por elemento. Arrays com mais de uma
+  /// dimensão usam o leitor genérico ([_readArray]).
+  Object _readPrimitiveArray<V>(Uint8List data, int elementOid,
+      V Function(ByteDataReader reader, int length) element) {
     final reader = ByteDataReader()..add(data);
-    reader.read(12); // header
+    final dimensions = reader.readInt32();
+    if (dimensions != 1) {
+      return dimensions == 0 ? <V>[] : _readArray<V>(data, elementOid);
+    }
+    reader.readInt32(); // flags (indica se há NULL)
+    reader.readInt32(); // OID do elemento
+    final count = reader.readInt32();
+    reader.readInt32(); // limite inferior
 
-    final decoded = [].cast<V>();
-    final size = reader.readInt32();
+    final values = <V>[];
+    for (var i = 0; i < count; i++) {
+      final length = reader.readInt32();
+      if (length < 0) {
+        // Há NULL: continua numa lista que aceita null.
+        final nullable = <V?>[...values, null];
+        for (i++; i < count; i++) {
+          final len = reader.readInt32();
+          nullable.add(len < 0 ? null : element(reader, len));
+        }
+        return nullable;
+      }
+      values.add(element(reader, length));
+    }
+    return values;
+  }
 
-    reader.read(4); // index
-
-    for (var i = 0; i < size; i++) {
-      final len = reader.readInt32();
-      decoded.add(valueDecoder(reader, len));
+  /// Lê um array no formato binário do PostgreSQL (`array_send`).
+  ///
+  /// Elementos NULL viram `null`. Se o array não tem NULL, a lista é do tipo
+  /// `List<V>`; se tem, `List<V?>`. Arrays com mais de uma dimensão viram
+  /// listas aninhadas.
+  Object _readArray<V>(Uint8List data, int elementOid) {
+    final elementDecoder = PostgresBinaryDecoder<Object>(
+        elementOid, encoding, timeZone,
+        decoding: decoding);
+    final reader = ByteDataReader()..add(data);
+    final dimensions = reader.readInt32();
+    reader.readInt32(); // flags (indica se há NULL)
+    reader.readInt32(); // OID do elemento
+    if (dimensions == 0) return <V>[];
+    final sizes = <int>[];
+    for (var i = 0; i < dimensions; i++) {
+      sizes.add(reader.readInt32());
+      reader.readInt32(); // limite inferior
     }
 
-    return decoded;
+    Object build(int level) {
+      final count = sizes[level];
+      if (level < dimensions - 1) {
+        return [for (var i = 0; i < count; i++) build(level + 1)];
+      }
+      final values = List<V?>.filled(count, null);
+      var hasNull = false;
+      for (var i = 0; i < count; i++) {
+        final length = reader.readInt32();
+        if (length < 0) {
+          hasNull = true;
+          continue;
+        }
+        final value = elementDecoder.convert(reader.read(length));
+        if (value == null) {
+          hasNull = true;
+        } else {
+          values[i] = value as V;
+        }
+      }
+      return hasNull ? values : List<V>.from(values);
+    }
+
+    return build(0);
   }
 
   /// See: https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
@@ -748,6 +931,9 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         reader.readUint16(); // NUMERIC_POS, NEG, NAN, PINF, or NINF
     final dScale = reader.readInt16(); // display scale
     if (signByte == 0xc000) return 'NaN';
+    // PostgreSQL 14+: antes eram decodificados como '0'.
+    if (signByte == 0xd000) return 'Infinity';
+    if (signByte == 0xf000) return '-Infinity';
     final sign = signByte == 0x4000 ? '-' : '';
     var intPart = '';
     var fractPart = '';
@@ -783,3 +969,49 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
     return result;
   }
 }
+
+const _notHandled = Object();
+
+const _numericArrayOid = 1231;
+
+const _timeOid = 1083;
+const _timeTzOid = 1266;
+const _inetOid = 869;
+const _cidrOid = 650;
+const _extendedOids = {_timeOid, _timeTzOid, _inetOid, _cidrOid};
+
+class _ArrayType<V> {
+  final int elementOid;
+  const _ArrayType(this.elementOid);
+
+  Object read(PostgresBinaryDecoder decoder, Uint8List input) =>
+      decoder._readArray<V>(input, elementOid);
+}
+
+/// Arrays suportados: OID do array -> OID e tipo Dart do elemento.
+const Map<int, _ArrayType> _arrayTypes = {
+  1000: _ArrayType<bool>(16), // bool[]
+  1001: _ArrayType<Uint8List>(17), // bytea[]
+  1003: _ArrayType<String>(19), // name[]
+  1005: _ArrayType<int>(21), // int2[]
+  1007: _ArrayType<int>(23), // int4[]
+  1016: _ArrayType<int>(20), // int8[]
+  1009: _ArrayType<String>(25), // text[]
+  1014: _ArrayType<String>(1042), // bpchar[]
+  1015: _ArrayType<String>(1043), // varchar[]
+  1021: _ArrayType<double>(700), // float4[]
+  1022: _ArrayType<double>(701), // float8[]
+  1017: _ArrayType<PgPoint>(600), // point[]
+  1115: _ArrayType<DateTime>(1114), // timestamp[]
+  1182: _ArrayType<DateTime>(1082), // date[]
+  1185: _ArrayType<DateTime>(1184), // timestamptz[]
+  1187: _ArrayType<Object>(1186), // interval[] (Duration ou PgInterval)
+  1231: _ArrayType<String>(1700), // numeric[]
+  2951: _ArrayType<String>(2950), // uuid[]
+  199: _ArrayType<dynamic>(114), // json[]
+  3807: _ArrayType<dynamic>(3802), // jsonb[]
+  1183: _ArrayType<Object>(_timeOid), // time[]
+  1270: _ArrayType<Object>(_timeTzOid), // timetz[]
+  1041: _ArrayType<Object>(_inetOid), // inet[]
+  651: _ArrayType<Object>(_cidrOid), // cidr[]
+};

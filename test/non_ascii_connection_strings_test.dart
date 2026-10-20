@@ -7,6 +7,14 @@ import 'package:test/expect.dart';
 import 'package:test/scaffolding.dart';
 
 void main() {
+  // These tests start their own containers (non-ASCII user and password on
+  // separate ports); without Docker they cannot run.
+  if (Platform.environment['POSTGRES_TEST_NO_DOCKER'] == '1') {
+    test('non-ascii connection strings', () {},
+        skip: 'needs Docker: starts its own PostgreSQL containers');
+    return;
+  }
+
   final user = 'abc@def';
   final password = 'pöstgrēs_üšęr_pæsswœêrd';
   final db = 'postgres';

@@ -140,8 +140,30 @@ void main() {
       expect(result.columnDescriptions[3].columnName, 'dbname');
     });
 
-    // TODO: add test for ReplicationMode.physical which requires tuning some
-    //       settings in the pg_hba.conf
+    test('IDENTIFY_SYSTEM em replicação física', () async {
+      // Requer linhas "replication" no pg_hba.conf (test/pg_configs).
+      final conn = PostgreSQLConnection(
+        'localhost',
+        5432,
+        'dart_test',
+        username: 'replication',
+        password: 'replication',
+        replicationMode: ReplicationMode.physical,
+      );
+      await conn.open();
+      addTearDown(conn.close);
+
+      final result = await conn.query(
+        'IDENTIFY_SYSTEM;',
+        useSimpleQueryProtocol: true,
+      );
+
+      expect(result.length, 1);
+      expect(result.columnDescriptions.map((c) => c.columnName),
+          ['systemid', 'timeline', 'xlogpos', 'dbname']);
+      // Na replicação física não há banco conectado.
+      expect(result.first[3], isNull);
+    });
   });
 
   group('Connection lifecycle', () {

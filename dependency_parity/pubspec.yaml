@@ -1,0 +1,31 @@
+name: postgres_fork_dependency_parity
+description: >-
+  Testes de paridade que comparam as implementações internas do postgres_fork
+  com os pacotes que elas substituíram (buffer, crypto, sasl_scram, saslprep,
+  unorm_dart, pool, async, stream_channel, collection, charcode e
+  enough_convert). Não faz parte do pacote publicado.
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  postgres_fork:
+    path: ..
+
+  # Versões exatas das implementações originais usadas como referência.
+  async: 2.13.0
+  buffer: 1.2.3
+  charcode: 1.4.0
+  collection: 1.19.1
+  crypto: 3.0.6
+  enough_convert: 1.6.0
+  pg_timezone: 1.0.1
+  pool: 1.5.1
+  sasl_scram: 0.1.1
+  saslprep: 1.0.3
+  stream_channel: 2.1.4
+  unorm_dart: 0.3.0
+
+dev_dependencies:
+  test: ^1.24.0
