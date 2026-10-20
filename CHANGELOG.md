@@ -2,6 +2,14 @@
 
 ## 3.0.0
 
+- **Bug fix**: a `TZDateTime` (what non-UTC zones decode to) could not be
+  sent back as a parameter: the text encoder appended an offset to
+  `toIso8601String()`, which already ends with one
+  (`'2024-01-15T12:34:56.789123-0300-03:00'`, error 22009). The value is now
+  encoded from its fields. Offsets between -01:00 and 00:00 (e.g. -00:30) also
+  kept a `+` sign.
+- Tests: `non_ascii_connection_strings_test.dart` is skipped with
+  `POSTGRES_TEST_NO_DOCKER=1` (it needs its own containers).
 - Removed the runtime dependencies `buffer`, `crypto`, `collection`, `sasl_scram`
   (and its transitive `saslprep`/`unorm_dart`), `stream_channel`, `async`,
   `charcode`, `meta`, `pool`, `stack_trace` and `enough_convert`. The needed
