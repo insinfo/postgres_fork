@@ -6,6 +6,10 @@
 include: package:lints/recommended.yaml
 
 analyzer:
+  # A separate package (its own pubspec) that compares lib/src/utils with the
+  # removed dependencies; analyze it from its folder after its pub get.
+  exclude:
+    - dependency_parity/**
   errors:
     unused_element: error
     unused_import: error
