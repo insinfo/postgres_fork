@@ -16,13 +16,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=GMT
 
 # ---------- pacotes + locale (inglês) ----------
-# The PGDG bullseye repository was archived (404); the packages come from
-# Debian.
-RUN rm -f /etc/apt/sources.list.d/pgdg.list && \
-    apt-get update && \
-    apt-get install -y locales tzdata && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+# locales and tzdata come with the postgres image; apt is not used because
+# the bullseye repositories of postgres:14.3 are gone (404).
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone && \
     echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen && \
     locale-gen

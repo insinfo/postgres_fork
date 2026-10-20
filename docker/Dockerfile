@@ -2,12 +2,8 @@ FROM postgres:14.3
 ADD pg_hba.conf /var/lib/postgresql/data/
 ADD postgresql.conf /var/lib/postgresql/data/
 COPY init.sql /docker-entrypoint-initdb.d/
-# The PGDG bullseye repository was archived (404); tzdata and locales come
-# from Debian.
-RUN rm -f /etc/apt/sources.list.d/pgdg.list
-RUN apt-get update 
-RUN apt-get -y install tzdata 
-RUN apt-get -y install locales
+# locales and tzdata come with the postgres image; apt is not used because
+# the bullseye repositories of postgres:14.3 are gone (404).
 RUN localedef -i pt_BR -c -f CP1252 -A /usr/share/locale/locale.alias pt_BR.CP1252
 #RUN sed -i -e 's/# pt_BR.CP1252 CP1252/pt_BR.UTF-8 UTF-8/pt_BR ISO-8859-1/pt_BR/' /etc/locale.gen && \
  #   dpkg-reconfigure --frontend=noninteractive locales && \

@@ -19,13 +19,9 @@ ENV TZ=America/Sao_Paulo
 # Instalar pacotes necessários e configurar o locale pt_BR.CP1252
 # Os comandos são executados como root por padrão no Dockerfile
 # ---------- pacotes + locale CP1252 ----------
-# The PGDG bullseye repository was archived (404); the packages come from
-# Debian.
-RUN rm -f /etc/apt/sources.list.d/pgdg.list && \
-    apt-get update && \
-    apt-get install -y locales tzdata && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
+# locales and tzdata come with the postgres image; apt is not used because
+# the bullseye repositories of postgres:14.3 are gone (404).
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
     echo 'pt_BR.CP1252 CP1252' >> /etc/locale.gen && \
     echo 'pt_BR.UTF-8 UTF-8'   >> /etc/locale.gen && \
     locale-gen && \
