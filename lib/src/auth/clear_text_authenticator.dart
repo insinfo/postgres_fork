@@ -1,10 +1,9 @@
 import 'dart:convert';
 
-import 'package:buffer/buffer.dart';
-
 import '../client_messages.dart';
 import '../encoded_string.dart';
 import '../server_messages.dart';
+import '../utils/buffer.dart';
 import 'auth.dart';
 
 class ClearAuthenticator extends PostgresAuthenticator {

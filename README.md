@@ -67,6 +67,71 @@ await connection.transaction((ctx) async {
 });
 ```
 
+Use savepoints to recover from an error without losing the whole transaction:
+
+```dart
+await connection.transaction((ctx) async {
+    await ctx.execute("INSERT INTO log (msg) VALUES ('start')");
+    try {
+        await ctx.savepoint((sp) async {
+            await sp.execute("INSERT INTO items (id) VALUES (1)");
+        });
+    } on PostgreSQLException catch (e) {
+        if (e.code != PgErrorCode.uniqueViolation) rethrow;
+        // Only the savepoint was rolled back; the transaction continues.
+    }
+});
+```
+
+Bulk insert with `COPY` (much faster than `INSERT` for many rows):
+
+```dart
+final count = await connection.copyRows('items', ['id', 'name', 'created'], [
+    [1, 'first', DateTime.now()],
+    [2, null, DateTime.now()],
+]);
+
+// Raw COPY data (text, CSV or binary), sent as it is produced.
+await connection.copyFrom('COPY items FROM STDIN WITH (FORMAT csv)', csvBytesStream);
+
+// Export.
+await connection.copyTo('COPY items TO STDOUT', (line) {
+    print(PgCopy.decodeTextRow(line));
+});
+```
+
+Connection pool (implements `PostgreSQLExecutionContext`):
+
+```dart
+final pool = PostgreSQLPool(
+    () => PostgreSQLConnection('localhost', 5432, 'dart_test',
+        username: 'dart', password: 'dart', applicationName: 'my-app'),
+    settings: const PostgreSQLPoolSettings(maxConnectionCount: 10));
+
+final rows = await pool.query('SELECT * FROM items WHERE id = @id',
+    substitutionValues: {'id': 1});
+await pool.runTx((ctx) async {
+    await ctx.execute('UPDATE items SET qty = qty - 1 WHERE id = 1');
+});
+await pool.close();
+```
+
+Large results as a stream (server-side cursor, fetched on demand):
+
+```dart
+await for (final row in connection.queryStream(
+        'SELECT * FROM big_table', fetchSize: 1000)) {
+    process(row.toColumnMap());
+}
+```
+
+Exact decimals: `DecodingSettings(numeric: NumericDecoding.decimal)` decodes
+`numeric` as `PgDecimal` (arbitrary precision, PostgreSQL arithmetic rules):
+
+```dart
+final total = PgDecimal.parse('10.50') * PgDecimal.fromInt(3); // 31.50
+```
+
 See the API documentation: https://pub.dev/documentation/postgres/latest/
 
 ## Additional Capabilities

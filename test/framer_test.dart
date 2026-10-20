@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/logical_replication_messages.dart';
 import 'package:postgres_fork/src/message_window.dart';
 import 'package:postgres_fork/src/server_messages.dart';
 import 'package:postgres_fork/src/shared_messages.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
+import 'package:postgres_fork/src/utils/buffer.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -310,6 +310,27 @@ void main() {
     final message = framer.messageQueue.toList().first;
     expect(message, isA<CopyDataMessage>());
   });
+  test('mensagens em pedaços que são views de um buffer maior', () {
+    // Regressão: com pedaços de tamanhos que não coincidem com as mensagens,
+    // mensagens eram perdidas ou havia RangeError.
+    final message = [68, 0, 0, 0, 13, 0, 1, 0, 0, 0, 3, 97, 98, 99];
+    final data = Uint8List.fromList([for (var i = 0; i < 30; i++) ...message]);
+    for (final chunk in [1, 3, 5, 7, 13, 64]) {
+      final framer = MessageFramer(utf8, TimeZoneSettings('UTC'));
+      final messages = <ServerMessage>[];
+      for (var off = 0; off < data.length; off += chunk) {
+        final end = off + chunk < data.length ? off + chunk : data.length;
+        framer.addBytes(Uint8List.sublistView(data, off, end));
+        while (framer.hasMessage) {
+          messages.add(framer.popMessage());
+        }
+      }
+      expect(messages, hasLength(30), reason: 'pedaços de $chunk bytes');
+      for (final m in messages) {
+        expect((m as DataRowMessage).values.single, [97, 98, 99]);
+      }
+    }
+  });
 }
 
 List<int> messageWithBytes(List<int> bytes, int messageID) {
@@ -342,4 +363,5 @@ void flush(MessageFramer framer) {
   expect(messages, [
     UnknownMessage(1, Uint8List.fromList([1, 2, 3])),
   ]);
+
 }

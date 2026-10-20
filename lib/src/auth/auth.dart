@@ -1,13 +1,10 @@
 import 'dart:convert';
 
-import 'package:crypto/crypto.dart';
-import 'package:sasl_scram/sasl_scram.dart';
-
 import '../../messages.dart';
-import '../../postgres.dart';
 import 'clear_text_authenticator.dart';
 import 'md5_authenticator.dart';
 import 'sasl_authenticator.dart';
+import 'scram.dart';
 
 enum AuthenticationScheme {
   md5,
@@ -46,13 +43,12 @@ PostgresAuthenticator createAuthenticator(PostgresAuthConnection connection,
     case AuthenticationScheme.md5:
       return MD5Authenticator(connection, encoding);
     case AuthenticationScheme.scramSha256:
-      final credentials = UsernamePasswordCredential(
-          username: connection.username, password: connection.password);
-      return PostgresSaslAuthenticator(connection,
-          ScramAuthenticator('SCRAM-SHA-256', sha256, credentials), encoding);
+      return PostgresSaslAuthenticator(
+          connection,
+          ScramSha256Authenticator(
+              username: connection.username, password: connection.password),
+          encoding);
     case AuthenticationScheme.clear:
       return ClearAuthenticator(connection, encoding);
-    default:
-      throw PostgreSQLException("Authenticator wasn't specified");
   }
 }

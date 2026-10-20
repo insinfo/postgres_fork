@@ -1,6 +1,8 @@
 // ignore_for_file: avoid_unused_constructor_parameters
 
 import '../../postgres_v3_experimental.dart';
+import '../client_messages.dart'
+    show pgMaxParameterCount, tooManyParametersException;
 
 
 class InternalQueryDescription implements PgSql {
@@ -42,6 +44,14 @@ class InternalQueryDescription implements PgSql {
 
   List<PgTypedParameter> bindParameters(Object? params) {
     final knownTypes = parameterTypes;
+    final count = params is List
+        ? params.length
+        : params is Map
+            ? params.length
+            : 0;
+    if (count > pgMaxParameterCount) {
+      throw tooManyParametersException(count);
+    }
 
     if (params == null) {
       if (knownTypes != null && knownTypes.isNotEmpty) {

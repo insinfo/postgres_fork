@@ -1,14 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:buffer/buffer.dart';
-import 'package:charcode/ascii.dart';
-import 'package:enough_convert/enough_convert.dart';
 import 'package:postgres_fork/postgres.dart';
 import 'constants.dart';
 import 'encoded_string.dart';
 import 'query.dart';
 import 'shared_messages.dart';
 import 'time_converters.dart';
+import 'utils/ascii.dart';
+import 'utils/buffer.dart';
 import 'v3/types.dart';
 
 abstract class ClientMessage extends BaseMessage {
@@ -45,23 +44,46 @@ abstract class ClientMessage extends BaseMessage {
   }
 }
 
+/// Número máximo de parâmetros numa mensagem Bind (o protocolo usa 16 bits).
+const int pgMaxParameterCount = 65535;
+
+/// Erro lançado antes de enviar uma consulta com parâmetros demais. Sem essa
+/// verificação, a contagem estoura os 16 bits do protocolo e o servidor
+/// responde com um erro de protocolo difícil de entender.
+PostgreSQLException tooManyParametersException(int count) =>
+    PostgreSQLException(
+        'The query has $count parameters, but the PostgreSQL protocol supports '
+        'at most $pgMaxParameterCount. Split the operation into smaller '
+        'batches (or use COPY).');
+
 class StartupMessage extends ClientMessage {
   final EncodedString? _username;
   final EncodedString _databaseName;
   final EncodedString? _timeZone;
   final EncodedString _replication;
   final Encoding encoding;
+  final List<EncodedString> _extraParameters;
 
+  /// [parameters] são parâmetros de sessão adicionais enviados na mensagem
+  /// de startup (por exemplo `application_name`, `search_path` ou
+  /// `statement_timeout`), evitando comandos `SET` depois de conectar.
   StartupMessage(
     String databaseName,
     TimeZoneSettings timeZone, {
     String? username,
     ReplicationMode replication = ReplicationMode.none,
     required this.encoding,
+    Map<String, String> parameters = const {},
   })  : _databaseName = EncodedString(databaseName, encoding),
         _timeZone = EncodedString(timeZone.value, encoding),
         _username = username == null ? null : EncodedString(username, encoding),
-        _replication = EncodedString(replication.value, encoding);
+        _replication = EncodedString(replication.value, encoding),
+        _extraParameters = [
+          for (final e in parameters.entries) ...[
+            EncodedString(e.key, encoding),
+            EncodedString(e.value, encoding),
+          ]
+        ];
 
   @override
   void applyToBuffer(ByteDataWriter buffer) {
@@ -72,7 +94,8 @@ class StartupMessage extends ClientMessage {
       encodingString = [...utf8.encode('ascii')];
     } else if (encoding is Latin1Codec) {
       encodingString = [...utf8.encode('ISO-8859-1')];
-    } else if (encoding is Windows1252Codec) {
+    } else if (encoding.name == 'windows-1252') {
+      // Ex.: Windows1252Codec do pacote enough_convert.
       encodingString = [...utf8.encode('WIN1252')];
     } else {
       //throw PostgreSQLException('encoding not supported');
@@ -86,12 +109,12 @@ class StartupMessage extends ClientMessage {
     variableLength = variableLength + encodingString.length;
 
     if (_timeZone != null) {
-      variableLength += _timeZone!.byteLength + 1;
+      variableLength += _timeZone.byteLength + 1;
     }
 
     if (_username != null) {
       fixedLength += 5;
-      variableLength += _username!.byteLength + 1;
+      variableLength += _username.byteLength + 1;
     }
 
     if (_replication.string != ReplicationMode.none.value) {
@@ -99,12 +122,16 @@ class StartupMessage extends ClientMessage {
       variableLength += _replication.byteLength + 1;
     }
 
+    for (final p in _extraParameters) {
+      variableLength += p.byteLength + 1;
+    }
+
     buffer.writeInt32(fixedLength + variableLength);
     buffer.writeInt32(ClientMessage.ProtocolVersion);
 
     if (_username != null) {
       buffer.write(UTF8ByteConstants.user);
-      _username!.applyToBuffer(buffer);
+      _username.applyToBuffer(buffer);
     }
 
     if (_replication.string != ReplicationMode.none.value) {
@@ -121,7 +148,11 @@ class StartupMessage extends ClientMessage {
 
     if (_timeZone != null) {
       buffer.write(UTF8ByteConstants.timeZone);
-      _timeZone!.applyToBuffer(buffer);
+      _timeZone.applyToBuffer(buffer);
+    }
+
+    for (final p in _extraParameters) {
+      p.applyToBuffer(buffer);
     }
 
     buffer.writeInt8(0);
@@ -212,7 +243,11 @@ class BindMessage extends ClientMessage {
       required Encoding encoding})
       : _typeSpecCount = _parameters.where((p) => p.isBinary).length,
         _portalName = EncodedString(portalName, encoding),
-        _statementName = EncodedString(statementName, encoding);
+        _statementName = EncodedString(statementName, encoding) {
+    if (_parameters.length > pgMaxParameterCount) {
+      throw tooManyParametersException(_parameters.length);
+    }
+  }
 
   int get length {
     if (_cachedLength == -1) {
@@ -319,6 +354,23 @@ class CloseMessage extends ClientMessage {
       ..writeInt32(length)
       ..writeUint8(isForPortal ? $P : $S);
     name.applyToBuffer(buffer);
+  }
+}
+
+/// Aborta um `COPY ... FROM STDIN` em andamento; o servidor responde com
+/// um erro que contém [reason].
+class CopyFailMessage extends ClientMessage {
+  final EncodedString reason;
+
+  CopyFailMessage(String reason, Encoding encoding)
+      : reason = EncodedString(reason, encoding);
+
+  @override
+  void applyToBuffer(ByteDataWriter buffer) {
+    buffer
+      ..writeUint8(102) // f
+      ..writeInt32(5 + reason.byteLength);
+    reason.applyToBuffer(buffer);
   }
 }
 

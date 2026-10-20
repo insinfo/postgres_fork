@@ -1,11 +1,10 @@
 import 'dart:convert';
 
-import 'package:buffer/buffer.dart';
-import 'package:crypto/crypto.dart';
-
 import '../client_messages.dart';
 import '../encoded_string.dart';
 import '../server_messages.dart';
+import '../utils/buffer.dart';
+import '../utils/crypto.dart';
 import 'auth.dart';
 
 class MD5Authenticator extends PostgresAuthenticator {
@@ -32,11 +31,12 @@ class AuthMD5Message extends ClientMessage {
   AuthMD5Message(String username, String password, List<int> saltBytes,
       // ignore: avoid_unused_constructor_parameters
       Encoding encoding) {
-    final passwordHash = md5.convert('$password$username'.codeUnits).toString();
-    final saltString = String.fromCharCodes(saltBytes);
-    final md5Hash =
-        md5.convert('$passwordHash$saltString'.codeUnits).toString();
-    //TODO verificar se aqui tem que ser ascii em vez do charset padrão da conexão
+    // Como o libpq (pg_md5_encrypt): md5(senha + usuário) sobre os bytes
+    // UTF-8 e depois md5(hash em hexadecimal + salt). O PostgreSQL guarda o
+    // hash calculado sobre os bytes da senha na codificação do servidor
+    // (normalmente UTF-8).
+    final passwordHash = md5Hex(utf8.encode('$password$username'));
+    final md5Hash = md5Hex([...ascii.encode(passwordHash), ...saltBytes]);
     _hashedAuthString = EncodedString('md5$md5Hash', utf8);
   }
 

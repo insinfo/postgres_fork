@@ -1,13 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
-
 import 'binary_codec.dart';
 import 'server_messages.dart';
 import 'shared_messages.dart';
 import 'time_converters.dart';
 import 'types.dart';
+import 'utils/buffer.dart';
 
 /// A base class for all [Logical Replication Message Formats][] from the server
 ///
@@ -83,7 +82,6 @@ LogicalReplicationMessage? tryParseLogicalReplicationMessage(
       return TruncateMessage(bytes);
 
     case LogicalReplicationMessageTypes.Unsupported:
-    default:
       // note this needs the full set of bytes unlike other cases
       return _tryParseJsonMessage(bytesList,encoding);
   }
@@ -304,12 +302,15 @@ class TypeMessage implements LogicalReplicationMessage {
   late final baseMessage = LogicalReplicationMessageTypes.Type;
 
   /// This is the type OID
-  // TODO: create a getter for the type as a string
   late final int dataType;
 
   late final String nameSpace;
 
   late final String name;
+
+  /// O tipo como texto, qualificado pelo schema (por exemplo
+  /// `public.meu_enum`); só o nome quando o schema vem vazio.
+  String get typeName => nameSpace.isEmpty ? name : '$nameSpace.$name';
 
   TypeMessage(Uint8List bytes,Encoding encoding) {
     final reader = ByteDataReader()..add(bytes);

@@ -1,18 +1,17 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
-import 'package:sasl_scram/sasl_scram.dart';
-
 import '../../postgres.dart';
 import '../client_messages.dart';
 import '../encoded_string.dart';
 import '../server_messages.dart';
+import '../utils/buffer.dart';
 import 'auth.dart';
+import 'scram.dart';
 
 /// Structure for SASL Authenticator
 class PostgresSaslAuthenticator extends PostgresAuthenticator {
-  final SaslAuthenticator authenticator;
+  final ScramSha256Authenticator authenticator;
 
   PostgresSaslAuthenticator(
       PostgresAuthConnection connection, this.authenticator, Encoding encoding)
@@ -29,7 +28,7 @@ class PostgresSaslAuthenticator extends PostgresAuthenticator {
           throw PostgreSQLException('KindSASL: No bytes to send');
         }
         msg = SaslClientFirstMessage(
-            bytesToSend, authenticator.mechanism.name, encoding);
+            bytesToSend, authenticator.mechanismName, encoding);
         break;
       case AuthenticationMessage.KindSASLContinue:
         final bytesToSend = authenticator.handleMessage(
@@ -63,7 +62,8 @@ class SaslClientFirstMessage extends ClientMessage {
   @override
   void applyToBuffer(ByteDataWriter buffer) {
     buffer.writeUint8(ClientMessage.PasswordIdentifier);
-    //TODO verificar se aqui tem que ser ascii em vez do charset padrão da conexão
+    // O nome do mecanismo ("SCRAM-SHA-256") é ASCII por especificação, e o
+    // UTF-8 de um texto ASCII tem os mesmos bytes.
     final utf8CachedMechanismName = EncodedString(mechanismName, utf8);
 
     final msgLength = bytesToSendToServer.length;

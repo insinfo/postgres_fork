@@ -1,19 +1,19 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:async/async.dart';
-import 'package:charcode/ascii.dart';
-import 'package:collection/collection.dart';
-import 'package:pool/pool.dart';
 import 'package:postgres_fork/postgres.dart';
-import 'package:stream_channel/stream_channel.dart';
 
 import '../../postgres_v3_experimental.dart';
 import '../auth/auth.dart';
+import '../binary_codec.dart';
 
 import '../query.dart';
+import '../utils/ascii.dart';
+import '../utils/operation_lock.dart';
+import '../utils/stream_channel.dart';
 import 'protocol.dart';
 import 'query_description.dart';
 
@@ -38,6 +38,7 @@ class _ResolvedSettings {
   final Duration queryTimeout;
   final TimeZoneSettings timeZone;
   final Encoding encoding;
+  final DecodingSettings decoding;
 
   final StreamChannelTransformer<BaseMessage, BaseMessage>? transformer;
 
@@ -51,6 +52,7 @@ class _ResolvedSettings {
         queryTimeout = settings?.connectTimeout ?? const Duration(minutes: 5),
         timeZone = settings?.timeZone ?? endpoint.timeZone,
         encoding = settings?.encoding ?? endpoint.encoding,
+        decoding = settings?.decodingSettings ?? const DecodingSettings(),
         transformer = settings?.transformer;
 
   bool onBadSslCertificate(X509Certificate certificate) {
@@ -155,8 +157,9 @@ class PgConnectionImplementation implements PgConnection {
       adaptedStream = SubscriptionStream(subscription);
     }
 
-    final outgoingSocket = StreamSinkExtensions(socket).transform<Uint8List>(
-        StreamSinkTransformer.fromHandlers(handleDone: (out) {
+    final outgoingSocket = StreamSinkTransformExtension(socket)
+        .transform<Uint8List>(
+            StreamSinkTransformer.fromHandlers(handleDone: (out) {
       // As per the stream channel's guarantees, closing the sink should close
       // the channel in both directions.
       socket.destroy();
@@ -166,8 +169,9 @@ class PgConnectionImplementation implements PgConnection {
     // return StreamChannel<List<int>>(adaptedStream, outgoingSocket).transform(
     //     WrapMessageTransformer(settings.encoding).messageTransformer);
 
-    return StreamChannel<List<int>>(adaptedStream, outgoingSocket)
-        .transform(messageTransformer(settings.encoding, settings.timeZone));
+    return StreamChannel<List<int>>(adaptedStream, outgoingSocket).transform(
+        messageTransformer(
+            settings.encoding, settings.timeZone, settings.decoding));
   }
 
   final StreamChannel<BaseMessage> _channel;
@@ -175,7 +179,7 @@ class PgConnectionImplementation implements PgConnection {
 
   final _ResolvedSettings _settings;
 
-  final Pool _operationLock = Pool(1);
+  final OperationLock _operationLock = OperationLock();
   _PendingOperation? _pending;
 
   final Map<String, String> _parameters = {};
@@ -189,7 +193,11 @@ class PgConnectionImplementation implements PgConnection {
   PgChannels get channels => _channels;
 
   PgConnectionImplementation._(this._channel, this._settings) {
-    _serverMessages = _channel.stream.listen(_handleMessage);
+    _serverMessages = _channel.stream.listen(_handleMessage,
+        onDone: () => _markClosed(notifyError: true),
+        // Erro no socket (por exemplo, conexão encerrada pelo servidor):
+        // antes ficava sem tratamento.
+        onError: (Object e) => _markClosed(notifyError: true, cause: e));
   }
 
   Future<void> _startup() {
@@ -199,11 +207,18 @@ class PgConnectionImplementation implements PgConnection {
       _channel.sink.add(StartupMessage(
         _settings.endpoint.database,
         _settings.timeZone,
-        username: _settings.username, encoding: _settings.endpoint.encoding,
-        // todo: Replication
+        username: _settings.username,
+        encoding: _settings.endpoint.encoding,
+        parameters: {
+          if (_settings.settings?.applicationName != null)
+            'application_name': _settings.settings!.applicationName!,
+          ...?_settings.settings?.startupParameters,
+        },
       ));
 
-      return result._done.future;
+      return result._done.future.whenComplete(() {
+        if (identical(_pending, result)) _pending = null;
+      });
     });
   }
 
@@ -221,15 +236,71 @@ class PgConnectionImplementation implements PgConnection {
       } else if (_pending != null) {
         await _pending!.handleMessage(message);
       }
+      if (message is ErrorResponseMessage) {
+        final severity =
+            PostgreSQLException.fromFields(message.fields).severity;
+        if (severity == PostgreSQLSeverity.fatal ||
+            severity == PostgreSQLSeverity.panic) {
+          // O servidor vai encerrar a conexão (por exemplo,
+          // pg_terminate_backend); a operação pendente já recebeu o erro.
+          await _markClosed(notifyError: false);
+        }
+      }
     } finally {
       _serverMessages.resume();
     }
   }
 
+  /// Marca a conexão como fechada e encerra a operação pendente (que, sem
+  /// isso, esperaria para sempre por mensagens que não vão chegar).
+  Future<void> _markClosed({required bool notifyError, Object? cause}) async {
+    if (_closedByServer) return;
+    _closedByServer = true;
+    _isClosed = true;
+    final pending = _pending;
+    _pending = null;
+    if (pending == null) return;
+    try {
+      if (notifyError) {
+        await pending.handleMessage(_connectionClosedError(cause));
+      }
+      await pending.handleMessage(
+          ReadyForQueryMessage(Uint8List.fromList([0x49]), utf8));
+    } catch (_) {
+      // A operação já tinha terminado.
+    }
+  }
+
+  bool _closedByServer = false;
+
+  static ErrorResponseMessage _connectionClosedError([Object? cause]) {
+    final bytes = BytesBuilder();
+    void field(int code, String value) {
+      bytes
+        ..addByte(code)
+        ..add(utf8.encode(value))
+        ..addByte(0);
+    }
+
+    field(0x53, 'FATAL'); // S
+    field(0x43, '08006'); // C: connection_failure
+    field(
+        0x4D,
+        cause == null
+            ? 'The connection was closed.'
+            : 'The connection was closed: $cause'); // M
+    bytes.addByte(0);
+    return ErrorResponseMessage(bytes.toBytes(), utf8);
+  }
+
+  PostgreSQLException _closedException() => PostgreSQLException(
+      'Attempting to execute query, but connection is not open.');
+
   Future<T> _sendAndWaitForQuery<T extends ServerMessage>(ClientMessage send) {
     final trace = StackTrace.current;
 
     return _operationLock.withResource(() {
+      if (_isClosed) throw _closedException();
       _channel.sink.add(AggregatedClientMessage([send, const SyncMessage()]));
 
       final completer = Completer<T>();
@@ -260,8 +331,31 @@ class PgConnectionImplementation implements PgConnection {
     });
   }
 
+  /// Transação em andamento (iniciada por [runTx]), se houver.
+  Completer<void>? _activeTransaction;
+
+  /// Espera a transação em andamento terminar. Usado pelas operações feitas
+  /// de fora da transação, para que não sejam executadas dentro dela.
+  Future<void> _waitForTransaction() async {
+    while (_activeTransaction != null) {
+      await _activeTransaction!.future;
+    }
+  }
+
   @override
   Future<PgStatement> prepare(Object query, {Duration? timeout}) async {
+    await _waitForTransaction();
+    return _prepare(query, timeout: timeout);
+  }
+
+  @override
+  Future<PgResult> execute(Object query,
+      {Object? parameters, Duration? timeout}) async {
+    await _waitForTransaction();
+    return _execute(query, parameters: parameters, timeout: timeout);
+  }
+
+  Future<PgStatement> _prepare(Object query, {Duration? timeout}) async {
     final name = 's/${_statementCounter++}';
     final description = InternalQueryDescription.wrap(query);
 
@@ -274,8 +368,7 @@ class PgConnectionImplementation implements PgConnection {
     return _PreparedStatement(description, name, this);
   }
 
-  @override
-  Future<PgResult> execute(Object query,
+  Future<PgResult> _execute(Object query,
       {Object? parameters, Duration? timeout}) async {
     final description = InternalQueryDescription.wrap(query);
     final variables = description.bindParameters(parameters);
@@ -283,7 +376,7 @@ class PgConnectionImplementation implements PgConnection {
     if (variables.isNotEmpty) {
       // The simple query protocol does not support variables, so we have to
       // prepare a statement explicitly.
-      final prepared = await prepare(description, timeout: timeout);
+      final prepared = await _prepare(description, timeout: timeout);
       try {
         return await prepared.run(variables, timeout: timeout);
       } finally {
@@ -309,25 +402,106 @@ class PgConnectionImplementation implements PgConnection {
   }
 
   @override
-  Future<R> run<R>(Future<R> Function(PgSession session) fn) {
-    // TODO: implement run
-    throw UnimplementedError();
+  Future<R> run<R>(Future<R> Function(PgSession session) fn,
+      {PgRetryOptions? retryOptions}) {
+    return _withRetry(retryOptions, () => fn(this));
   }
 
   @override
-  Future<R> runTx<R>(Future<R> Function(PgSession session) fn) {
-    // TODO: implement runTx
-    throw UnimplementedError();
+  Future<R> runTx<R>(Future<R> Function(PgSession session) fn,
+      {PgRetryOptions? retryOptions}) {
+    return _withRetry(retryOptions, () => _runTransaction(fn));
   }
+
+  Future<R> _runTransaction<R>(Future<R> Function(PgSession session) fn) async {
+    await _waitForTransaction();
+    // Sem await entre a verificação acima e esta atribuição: nenhuma outra
+    // transação pode começar no meio.
+    final done = Completer<void>();
+    _activeTransaction = done;
+    final session = _TransactionSession(this);
+    try {
+      await _execute('BEGIN');
+      try {
+        final result = await fn(session);
+        session._closed = true;
+        await _execute('COMMIT');
+        return result;
+      } catch (_) {
+        session._closed = true;
+        try {
+          await _execute('ROLLBACK');
+        } catch (_) {
+          // A conexão pode ter sido perdida; o erro original é o relevante.
+        }
+        rethrow;
+      }
+    } finally {
+      _activeTransaction = null;
+      done.complete();
+    }
+  }
+
+  Future<R> _withRetry<R>(PgRetryOptions? options, Future<R> Function() body) =>
+      options == null ? body() : options.retry(body);
+
+  bool _isClosed = false;
+
+  /// Se a conexão foi fechada (por [close] ou pelo servidor).
+  bool get isClosed => _isClosed;
 
   @override
   Future<void> close() async {
+    if (_closedByServer) {
+      // O socket já foi encerrado: não há o que enviar.
+      try {
+        await Future.wait([_channel.sink.close(), _serverMessages.cancel()]);
+      } catch (_) {}
+      return;
+    }
     await _operationLock.withResource(() {
       // Use lock to await earlier operations
+      _isClosed = true;
       _channel.sink.add(const TerminateMessage());
     });
 
     await Future.wait([_channel.sink.close(), _serverMessages.cancel()]);
+  }
+}
+
+/// Sessão entregue à função de [PgConnectionImplementation.runTx]: executa
+/// diretamente na transação (sem esperar por ela) e não pode ser usada depois
+/// que a transação termina.
+class _TransactionSession implements PgSession {
+  final PgConnectionImplementation _connection;
+  bool _closed = false;
+
+  _TransactionSession(this._connection);
+
+  void _checkOpen() {
+    if (_closed) {
+      throw StateError('The transaction session can only be used inside '
+          'the runTx callback.');
+    }
+  }
+
+  @override
+  Future<PgStatement> prepare(Object query, {Duration? timeout}) async {
+    _checkOpen();
+    return _connection._prepare(query, timeout: timeout);
+  }
+
+  @override
+  Future<PgResult> execute(Object query,
+      {Object? parameters, Duration? timeout}) async {
+    _checkOpen();
+    return _connection._execute(query,
+        parameters: parameters, timeout: timeout);
+  }
+
+  @override
+  Future<void> close() async {
+    throw StateError('The transaction session is closed by runTx.');
   }
 }
 
@@ -379,6 +553,7 @@ class _PgResultStreamSubscription
   final Completer<PgResultSchema> _schema = Completer();
   final Completer<void> _done = Completer();
   PgResultSchema? _resultSchema;
+  List<int> _columnTypeOids = const [];
 
   late final _portalName = 'p/${connection._portalCounter++}';
 
@@ -386,6 +561,7 @@ class _PgResultStreamSubscription
       _BoundStatement statement, this._controller, this._source)
       : connection = statement.statement._connection {
     connection._operationLock.withResource(() async {
+      if (connection._isClosed) return _failClosed();
       connection._pending = this;
 
       connection._channel.sink.add(AggregatedClientMessage([
@@ -412,12 +588,18 @@ class _PgResultStreamSubscription
   _PgResultStreamSubscription.simpleQuery(
       String sql, this.connection, this._controller, this._source) {
     connection._operationLock.withResource(() async {
+      if (connection._isClosed) return _failClosed();
       connection._pending = this;
 
       connection._channel.sink
           .add(QueryMessage(sql, connection._settings.encoding));
       await _done.future;
     });
+  }
+
+  Future<void> _failClosed() async {
+    await handleMessage(PgConnectionImplementation._connectionClosedError());
+    await handleMessage(ReadyForQueryMessage(Uint8List.fromList([0x49]), utf8));
   }
 
   @override
@@ -428,12 +610,17 @@ class _PgResultStreamSubscription
 
   @override
   Future<void> handleMessage(ServerMessage message) async {
+    // Mensagens depois do fim (por exemplo, um erro FATAL não solicitado).
+    if (_done.isCompleted) return;
     if (message is ErrorResponseMessage) {
       _controller.addError(
           PostgreSQLException.fromFields(message.fields), StackTrace.current);
     } else if (message is BindCompleteMessage) {
       // Nothing to do
     } else if (message is RowDescriptionMessage) {
+      _columnTypeOids = [
+        for (final field in message.fieldDescriptions) field.typeId
+      ];
       final schema = _resultSchema = PgResultSchema([
         for (final field in message.fieldDescriptions)
           PgResultColumn(
@@ -450,16 +637,35 @@ class _PgResultStreamSubscription
       final schema = _resultSchema!;
 
       final columnValues = <Object?>[];
-      for (var i = 0; i < message.values.length; i++) {
-        final field = schema.columns[i];
-
-        final type = field.type;
-        final codec = field.binaryEncoding
-            ? type.binaryCodec(
-                connection._settings.encoding, connection._settings.timeZone)
-            : type.textCodec(connection._settings.encoding);
-
-        columnValues.add(codec.decode(message.values[i]));
+      try {
+        for (var i = 0; i < message.values.length; i++) {
+          final field = schema.columns[i];
+          final type = field.type;
+          if (field.binaryEncoding) {
+            final settings = connection._settings;
+            final typeOid = _columnTypeOids[i];
+            // Mesmo OID usado antes por type.binaryCodec, exceto para os
+            // tipos tratados diretamente pelo OID (time, timetz, inet, cidr
+            // e arrays), que antes eram lidos como bytea.
+            final decoderOid = PostgresBinaryDecoder.decodesByOid(typeOid)
+                ? typeOid
+                : (type.oid ?? PgDataType.integer.oid!);
+            columnValues.add(PostgresBinaryDecoder<Object>(
+                    decoderOid, settings.encoding, settings.timeZone,
+                    decoding: settings.decoding)
+                .convert(message.values[i]));
+          } else {
+            columnValues.add(type
+                .textCodec(connection._settings.encoding)
+                .decode(message.values[i]));
+          }
+        }
+      } catch (e, st) {
+        // Uma falha de decodificação afeta só esta consulta: o erro é
+        // entregue ao consumidor e as próximas mensagens continuam sendo
+        // processadas normalmente até o ReadyForQuery.
+        _controller.addError(e, st);
+        return;
       }
 
       final row = _ResultRow(schema, columnValues);
@@ -468,6 +674,7 @@ class _PgResultStreamSubscription
       _affectedRows.complete(message.rowsAffected);
     } else if (message is ReadyForQueryMessage) {
       _done.complete();
+      if (identical(connection._pending, this)) connection._pending = null;
 
       // Make sure the affectedRows and schema futures complete with something
       // after the query is done, even if we didn't get a row description
@@ -652,6 +859,7 @@ class _AuthenticationProcedure extends _PendingOperation {
 
   @override
   Future<void> handleMessage(ServerMessage message) async {
+    if (_done.isCompleted) return;
     if (message is ErrorResponseMessage) {
       _done.completeError(PostgreSQLException.fromFields(message.fields));
     } else if (message is AuthenticationMessage) {

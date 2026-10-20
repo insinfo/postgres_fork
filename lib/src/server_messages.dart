@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:buffer/buffer.dart';
-import 'package:collection/collection.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 import '../messages.dart';
 import 'connection.dart';
+import 'decoding_settings.dart';
 import 'query.dart';
 import 'time_converters.dart';
 import 'types.dart';
+import 'utils/buffer.dart';
 
 abstract class ServerMessage extends BaseMessage {}
 
@@ -123,12 +123,14 @@ class RowDescriptionMessage extends ServerMessage {
   final fieldDescriptions = <FieldDescription>[];
 
   RowDescriptionMessage(
-      Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone) {
+      Uint8List bytes, Encoding encoding, TimeZoneSettings timeZone,
+      [DecodingSettings decoding = const DecodingSettings()]) {
     final reader = ByteDataReader()..add(bytes);
     final fieldCount = reader.readInt16();
 
     for (var i = 0; i < fieldCount; i++) {
-      final rowDesc = FieldDescription.read(reader, encoding, timeZone);
+      final rowDesc =
+          FieldDescription.read(reader, encoding, timeZone, decoding);
       fieldDescriptions.add(rowDesc);
     }
   }
@@ -288,6 +290,41 @@ class CopyBothResponseMessage implements ServerMessage {
   }
 }
 
+/// Início de um `COPY ... FROM STDIN`: o servidor espera os dados
+/// (CopyData) seguidos de CopyDone ou CopyFail.
+class CopyInResponseMessage extends _CopyResponseMessage {
+  CopyInResponseMessage(super.bytes);
+
+  @override
+  String toString() => 'CopyInResponseMessage(format: $copyFormat)';
+}
+
+/// Início de um `COPY ... TO STDOUT`: o servidor envia os dados (CopyData)
+/// seguidos de CopyDone.
+class CopyOutResponseMessage extends _CopyResponseMessage {
+  CopyOutResponseMessage(super.bytes);
+
+  @override
+  String toString() => 'CopyOutResponseMessage(format: $copyFormat)';
+}
+
+abstract class _CopyResponseMessage extends ServerMessage {
+  /// 0 = texto (ou CSV), 1 = binário.
+  late final int copyFormat;
+
+  /// Formato de cada coluna (0 = texto, 1 = binário).
+  final columnsFormatCode = <int>[];
+
+  _CopyResponseMessage(Uint8List bytes) {
+    final reader = ByteDataReader()..add(bytes);
+    copyFormat = reader.readInt8();
+    final numberOfColumns = reader.readInt16();
+    for (var i = 0; i < numberOfColumns; i++) {
+      columnsFormatCode.add(reader.readInt16());
+    }
+  }
+}
+
 class PrimaryKeepAliveMessage implements ReplicationMessage, ServerMessage {
   /// The current end of WAL on the server.
   late final LSN walEnd;
@@ -388,10 +425,10 @@ class UnknownMessage extends ServerMessage {
     // 2. Comparação do código
     if (code != other.code) return false;
 
-    // 3. Comparação dos bytes (usando ListEquality para tratar listas e null)
-    // ListEquality().equals compara corretamente listas e também trata nulls.
-    // (null == null) é true, (list == null) é false, etc.
-    if (!const ListEquality().equals(bytes, other.bytes)) return false;
+    // 3. Comparação dos bytes (mesma semântica de ListEquality().equals do
+    // pacote collection): (null == null) é true, (list == null) é false e
+    // listas são comparadas elemento a elemento.
+    if (!_bytesEqual(bytes, other.bytes)) return false;
 
     // Se chegou até aqui, são iguais
     return true;
@@ -414,6 +451,17 @@ class UnknownMessage extends ServerMessage {
   //   }
   //   return code == other.code;
   // }
+}
+
+bool _bytesEqual(List<int>? a, List<int>? b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  final length = a.length;
+  if (length != b.length) return false;
+  for (var i = 0; i < length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 class ErrorField {

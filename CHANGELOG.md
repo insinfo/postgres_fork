@@ -1,5 +1,174 @@
 # Changelog
 
+## 3.0.0
+
+- Removed the runtime dependencies `buffer`, `crypto`, `collection`, `sasl_scram`
+  (and its transitive `saslprep`/`unorm_dart`), `stream_channel`, `async`,
+  `charcode`, `meta`, `pool`, `stack_trace` and `enough_convert`. The needed
+  functionality is now implemented in `lib/src/utils` with the same behavior
+  (verified by the parity tests in `dependency_parity/`).
+- **Breaking change** (v3 experimental API): `PgSessionSettings.transformer` now
+  uses the `StreamChannelTransformer`/`StreamSinkTransformer` classes exported by
+  `package:postgres_fork/postgres_v3_experimental.dart` instead of the ones from
+  `package:stream_channel`/`package:async`.
+- The `windows-1252` client encoding is now detected by `Encoding.name`, so any
+  codec named `windows-1252` (not only `Windows1252Codec` from `enough_convert`)
+  is sent to the server as `WIN1252`.
+- Removed the `pg_timezone` dependency. The time zone runtime (`TZDateTime`,
+  `Location`, `TimeZone`) is now part of the package and exported by
+  `package:postgres_fork/timezone.dart`. The embedded database is generated from
+  the IANA tz database (currently 2026e) by `scripts/update_tzdb.dart`, which
+  uses a Dart port of the IANA `zic` compiler (`scripts/tzdb/zic.dart`).
+- New `TimeZoneSettings.databaseVariant`:
+  - `TimeZoneDatabaseVariant.full` (**new default**): all IANA zones and links
+    (e.g. `Brazil/East`, `US/Eastern`) with the complete history and explicit
+    transitions up to 2100, like PostgreSQL itself.
+  - `TimeZoneDatabaseVariant.reduced`: the previous `pg_timezone` database
+    (431 common locations, transitions limited to 5 years around the
+    generation date).
+- **Bug fix**: decoding `timestamptz` with `forceDecodeTimestamptzAsUTC: false`
+  could return a value shifted by the daylight saving time difference between
+  the value's date and the current date (for example, a January timestamp in
+  `America/New_York` decoded during summer came back one hour off). The decoded
+  value now always represents the same instant as the server value, with the
+  local fields computed using the offset in force at that date. Non-UTC time
+  zones now always return a `TZDateTime` (previously zones whose current offset
+  was zero returned a UTC `DateTime`).
+
+- Fixes for issue #2 (type decoding and lost connections):
+  - A value that cannot be decoded no longer closes the connection: the query
+    fails with the decoding error and the connection stays usable (v2 and v3
+    APIs, also inside transactions).
+  - Arrays: `NULL` elements are decoded as `null` (previously `int[]` with
+    `NULL` failed and closed the connection, and `text[]` returned `''`).
+    Lists without `NULL` keep the element type (`List<int>`); lists with `NULL`
+    are `List<int?>`. Multi-dimensional arrays are decoded as nested lists.
+    New array types: `date[]`, `timestamp[]`, `timestamptz[]`, `numeric[]`,
+    `int2[]`, `float4[]`, `bytea[]`, `name[]`, `bpchar[]`, `uuid[]`, `json[]`,
+    `point[]`, `interval[]`, `time[]`, `timetz[]`, `inet[]` and `cidr[]`.
+  - New `DecodingSettings` (`PostgreSQLConnection(decodingSettings: ...)` and
+    `PgSessionSettings.decodingSettings`):
+    - `interval`: `IntervalDecoding.duration` (default, unchanged: `Duration`;
+      intervals with months or days throw `UnimplementedError` with an
+      explanatory message) or `IntervalDecoding.pgInterval` (new `PgInterval`
+      class with months, days and microseconds).
+    - `extendedTypes` for `time`, `timetz`, `inet` and `cidr` (previously raw
+      bytes, and `cidr` returned an invalid string):
+      `ExtendedTypeDecoding.objects` (**default**: `PgTime`, `PgTimeTz`,
+      `PgInet`), `.text` (same text as PostgreSQL) or `.bytes` (raw bytes).
+  - `PgInterval`, `PgTime`, `PgTimeTz` and `PgInet` are accepted as query
+    parameters (and `PgInterval` for `@x:interval`).
+- Authentication fixes:
+  - MD5: the hash is now computed over the UTF-8 bytes of the password and the
+    user name (as libpq does). Previously non-ASCII passwords failed.
+  - SCRAM-SHA-256: passwords rejected by SASLprep (e.g. containing control
+    characters) are used as is (as libpq does) instead of throwing.
+
+- New features (v2 API, `PostgreSQLConnection`):
+  - `COPY`: `copyFrom(sql, Stream<List<int>>)` (`COPY ... FROM STDIN`, with
+    flow control), `copyTo(sql, onData)` (`COPY ... TO STDOUT`) and
+    `copyRows(table, columns, rows)`, which writes Dart values in the COPY text
+    format (much faster than `INSERT` for many rows). `PgCopy` encodes rows and
+    values (`encodeTextRows`, `encodeTextValue`) and decodes text rows
+    (`decodeTextRow`). An error in the data stream or in the server aborts the
+    COPY (nothing is written) and the connection stays usable. They are also
+    available in transactions through an extension on
+    `PostgreSQLExecutionContext`. A `COPY ... FROM STDIN` sent through `query`
+    or `execute` now fails with a clear error (previously the connection
+    hung).
+  - Savepoints: `ctx.savepoint((sp) async { ... })` inside `transaction`. An
+    error inside the block rolls back only the savepoint
+    (`ROLLBACK TO SAVEPOINT`) and is rethrown; the transaction can continue
+    and be committed. Savepoints can be nested.
+  - Session parameters sent in the startup message: `applicationName` and
+    `startupParameters` (e.g. `search_path`, `statement_timeout`), avoiding
+    `SET` round trips after connecting (also `PgSessionSettings` in v3).
+  - `cancelQuery()` sends a `CancelRequest` (as libpq). With
+    `cancelQueryOnTimeout: true`, a query that times out is also cancelled on
+    the server, so the connection is released right away.
+  - `maxPreparedStatements`: limits the prepared statements kept by the
+    connection (least recently used ones are closed on the server). Default:
+    no limit (unchanged).
+  - `sslMode` (`PgSslMode.disable`, `prefer`, `require`, `verifyFull`). When
+    null, `useSSL` decides as before.
+  - `listen`, `unlisten`, `notify` and `notificationsFor` for
+    `LISTEN`/`NOTIFY`.
+  - `DecodingSettings.timestamp`: `TimestampDecoding.localWallClock` decodes
+    `timestamp` and `date` as local `DateTime`s with the same fields stored in
+    the database.
+  - `PgErrorCode` with common SQLSTATE codes (`uniqueViolation`,
+    `foreignKeyViolation`, `serializationFailure`, `deadlockDetected`,
+    `queryCanceled`, ...) to compare with `PostgreSQLException.code`.
+  - `PostgresTextEncodable`: application types can define their own text
+    representation for query parameters.
+  - Connection pool: `PostgreSQLPool(() => PostgreSQLConnection(...),
+    settings: PostgreSQLPoolSettings(...))`, which implements
+    `PostgreSQLExecutionContext` and adds `run`, `runTx`, `withConnection`,
+    `queryStream`, `copyFrom`/`copyTo`/`copyRows`, `status` and `close`.
+    Settings: `maxConnectionCount`, `maxConnectionAge`, `maxSessionUse`,
+    `maxErrorCount`, `maxUseCount`, `idleTestThreshold`, `acquireTimeout`,
+    `onOpen` and `retryOptions`. Sessions wait in arrival order; a
+    connection is closed instead of returned when it was closed, the session
+    timed out, a transaction was left open or a limit was reached. Ordinary
+    SQL errors do not close the connection.
+  - Server-side cursors: `queryStream(sql, fetchSize: ...)` returns the rows
+    as a `Stream`, fetched in batches only when the consumer asks for more
+    (pausing the subscription stops fetching; cancelling closes the cursor).
+    Available on the connection, inside `transaction` and on the pool.
+  - `PgDecimal`: arbitrary precision decimal (the `numeric` type, including
+    `NaN` and `Infinity`) with the same arithmetic, scale and rounding rules
+    as PostgreSQL (verified against the server with random values).
+    `DecodingSettings(numeric: NumericDecoding.decimal)` decodes `numeric`
+    and `numeric[]` as `PgDecimal` (default: `NumericDecoding.string`,
+    unchanged). `PgDecimal` is accepted as a query parameter and in COPY.
+- New features (v3 experimental API): `PgSessionExecutor.run` and `runTx`
+  (with optional `PgRetryOptions`, which retry on serialization failures and
+  deadlocks by default); `PgPool.open` is now implemented (it threw
+  `UnimplementedError`; `PgPool.prepare` throws `UnsupportedError`, use
+  `withConnection`); `PgConnectionImplementation.isClosed`;
+  `TypeMessage.typeName` in logical replication.
+- `PgRetryOptions` is exported by both libraries. `PostgreSQLRollback` now
+  implements `Exception` (`PostgreSQLPool.runTx` throws it when the
+  transaction is cancelled and the return type does not accept it).
+- `connection_config.dart` gathers the connection configuration types
+  (`PgSslMode`, `ReplicationMode`, `DecodingSettings`, `TimeZoneSettings`);
+  `ReplicationMode` is still exported from the same libraries.
+- Bug fixes:
+  - `execute(timeoutInSeconds: ...)` ignored the given timeout and always used
+    the connection's `queryTimeoutInSeconds`.
+  - Simple query protocol (`execute`, `useSimpleQueryProtocol: true`): a `NULL`
+    value threw an error that closed the connection; it is now `null`.
+  - Queries with more than 65535 parameters now fail with a clear error before
+    being sent, and the connection stays usable (previously the parameter
+    count overflowed and the connection broke).
+  - `Uint8List` parameters without a type are sent as `bytea` (hex format)
+    instead of being encoded as an array of numbers.
+  - In connections that are not in replication mode, `COPY ... TO STDOUT` data
+    starting with `k` or `w` was parsed as a replication message (which could
+    close the connection).
+  - `numeric` values `Infinity` and `-Infinity` (PostgreSQL 14+) were decoded
+    as `'0'`; the strings `'Infinity'`/`'-Infinity'` were rejected as typed
+    `numeric` parameters.
+  - Closing the connection (or losing it) during a transaction left the
+    transaction's queries waiting until their timeout, and the rollback then
+    waited another 30 seconds; they now fail immediately.
+  - v3 API: booleans in results of the simple query protocol (queries
+    without parameters) were always `false`.
+  - v3 API: when the server closed the connection (e.g.
+    `pg_terminate_backend`), the running operation and the next ones never
+    completed, the socket error was unhandled and an unsolicited `FATAL`
+    error could throw `Bad state: Cannot add event after closing`. They now
+    fail with `PostgreSQLException`.
+- Fixed a bug inherited from the `buffer` package: when the received byte
+  chunks were views of a larger buffer, reading across chunks could read past
+  the end of a chunk, losing messages or throwing `RangeError`.
+- Performance (measured against 2.8.5, AOT, local PostgreSQL 16): no
+  regression in queries, inserts, transactions or decoding (CPU-only decoding
+  and encoding benchmarks are ~1% faster); arrays are ~9% faster; SCRAM
+  connections ~18% faster; decoding `timestamptz` with a non-UTC time zone is
+  ~40x faster (the location lookup is cached until the next zone transition).
+- Requires Dart SDK 3.6 (`sdk: ^3.6.0`).
+
 ## 2.8.5
 
 - fix decode server Error Response Message

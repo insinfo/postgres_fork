@@ -3,18 +3,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 
 import 'binary_codec.dart';
 import 'client_messages.dart';
 import 'connection.dart';
+import 'decoding_settings.dart';
 import 'execution_context.dart';
 import 'placeholder_identifier_enum.dart';
 import 'substituter.dart';
 import 'substituter2.dart';
 import 'text_codec.dart';
 import 'types.dart';
+import 'utils/buffer.dart';
 
 class Query<T> {
   Query(
@@ -35,6 +36,32 @@ class Query<T> {
   final bool useSendSimple;
 
   String? statementIdentifier;
+
+  /// Envia [statement] sem processar placeholders (protocolo simples).
+  bool rawStatement = false;
+
+  /// `COPY ... FROM STDIN`: dados enviados ao servidor (ver `copyFrom`).
+  /// Sem eles, um COPY FROM STDIN é abortado com CopyFail.
+  Stream<List<int>>? copyInData;
+
+  /// `COPY ... TO STDOUT`: recebe o conteúdo de cada CopyData (ver
+  /// `copyTo`). Sem ele, os dados são descartados.
+  void Function(Uint8List data)? copyOutHandler;
+
+  bool _abandoned = false;
+
+  /// Chamado quando a consulta é abandonada (timeout), para interromper o
+  /// envio de dados de COPY em andamento.
+  void Function()? onAbandon;
+
+  /// Se a consulta foi abandonada por quem a chamou (timeout).
+  bool get isAbandoned => _abandoned;
+
+  void abandon() {
+    if (_abandoned) return;
+    _abandoned = true;
+    onAbandon?.call();
+  }
 
   Future<QueryResult<T>?> get future => _onComplete.future;
 
@@ -65,7 +92,8 @@ class Query<T> {
   void sendSimple(Socket socket) {
     // final sqlString = PostgreSQLFormat.substitute(
     //     statement, substitutionValues as Map<String, dynamic>?);
-    final sqlString = _formatSql([], [], isSimple: true);
+    final sqlString =
+        rawStatement ? statement : _formatSql([], [], isSimple: true);
     final queryMessage = QueryMessage(sqlString, connection.encoding);
     socket.add(queryMessage.asBytes());
   }
@@ -131,7 +159,10 @@ class Query<T> {
     }
   }
 
-  void sendExtended(Socket socket, {CachedQuery? cacheQuery}) {
+  /// [closeStatements]: nomes de prepared statements removidos do cache
+  /// (LRU) que devem ser fechados no servidor antes desta consulta.
+  void sendExtended(Socket socket,
+      {CachedQuery? cacheQuery, List<String> closeStatements = const []}) {
     if (cacheQuery != null) {
       if (placeholderIdentifier == PlaceholderIdentifier.onlyQuestionMark) {
         _prepareSubstitutionValues();
@@ -139,7 +170,8 @@ class Query<T> {
 
       fieldDescriptions = cacheQuery.fieldDescriptions!;
       sendCachedQuery(
-          socket, cacheQuery, substitutionValues as Map<String, dynamic>?);
+          socket, cacheQuery, substitutionValues as Map<String, dynamic>?,
+          closeStatements: closeStatements);
       return;
     }
 
@@ -154,6 +186,9 @@ class Query<T> {
         formatIdentifiers.map((i) => i.type).toList();
 
     final messages = [
+      // Statements removidos do cache (LRU) são fechados antes do Parse.
+      for (final name in closeStatements)
+        CloseMessage.statement(connection.encoding, name),
       ParseMessage(sqlString,
           statementName: statementName, encoding: connection.encoding),
       DescribeMessage(
@@ -172,7 +207,8 @@ class Query<T> {
   }
 
   void sendCachedQuery(Socket socket, CachedQuery cacheQuery,
-      Map<String, dynamic>? substitutionValues) {
+      Map<String, dynamic>? substitutionValues,
+      {List<String> closeStatements = const []}) {
     final statementName = cacheQuery.preparedStatementName;
     final parameterList = cacheQuery.orderedParameters!
         .map((identifier) => ParameterValue(identifier, substitutionValues,
@@ -180,6 +216,8 @@ class Query<T> {
         .toList();
 
     final bytes = ClientMessage.aggregateBytes([
+      for (final name in closeStatements)
+        CloseMessage.statement(connection.encoding, name),
       BindMessage(parameterList,
           statementName: statementName!, encoding: connection.encoding),
       ExecuteMessage(connection.encoding),
@@ -228,7 +266,8 @@ class Query<T> {
     // "In simple Query mode, the format of retrieved values is always text"
     //  https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
     if (useSendSimple) {
-      final data = rawRowData.map((e) => connection.encoding.decode(e!));
+      final data =
+          rawRowData.map((e) => e == null ? null : connection.encoding.decode(e));
       rows.add(data.toList());
       return;
     }
@@ -361,7 +400,8 @@ class FieldDescription implements ColumnDescription {
   );
 
   factory FieldDescription.read(
-      ByteDataReader reader, Encoding encoding, TimeZoneSettings  timeZone) {
+      ByteDataReader reader, Encoding encoding, TimeZoneSettings timeZone,
+      [DecodingSettings decoding = const DecodingSettings()]) {
     final buf = StringBuffer();
     var byte = 0;
     do {
@@ -381,7 +421,8 @@ class FieldDescription implements ColumnDescription {
     final formatCode = reader.readUint16();
     
 
-    final converter = PostgresBinaryDecoder(typeOid, encoding, timeZone);
+    final converter = PostgresBinaryDecoder(typeOid, encoding, timeZone,
+        decoding: decoding);
 
     return FieldDescription._(
       converter, fieldName, tableID, columnID, typeOid,

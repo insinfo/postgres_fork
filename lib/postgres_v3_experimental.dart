@@ -2,15 +2,28 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:collection/collection.dart';
+import 'package:postgres_fork/src/decoding_settings.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
-import 'package:stream_channel/stream_channel.dart';
 
+import 'src/retry_options.dart';
+import 'src/utils/delegating_list.dart';
+import 'src/utils/stream_channel.dart';
 import 'src/v3/connection.dart';
+import 'src/v3/pool.dart';
 import 'src/v3/protocol.dart';
 import 'src/v3/query_description.dart';
 import 'src/v3/types.dart';
 
+export 'src/retry_options.dart';
+// Tipos usados por [PgSessionSettings.transformer]. Antes vinham dos pacotes
+// `stream_channel` e `async`; agora são implementados pelo próprio pacote.
+export 'src/utils/stream_channel.dart'
+    show
+        StreamChannel,
+        StreamChannelMixin,
+        StreamChannelTransformer,
+        StreamSinkTransformer,
+        StreamSinkTransformExtension;
 export 'src/v3/types.dart';
 
 abstract class PgPool implements PgSession, PgSessionExecutor {
@@ -19,7 +32,8 @@ abstract class PgPool implements PgSession, PgSessionExecutor {
     PgSessionSettings? sessionSettings,
     PgPoolSettings? poolSettings,
   }) =>
-      throw UnimplementedError();
+      PgPoolImplementation.open(endpoints,
+          sessionSettings: sessionSettings, poolSettings: poolSettings);
 
   Future<R> withConnection<R>(
     Future<R> Function(PgConnection connection) fn, {
@@ -51,9 +65,22 @@ abstract class PgSession {
 }
 
 abstract class PgSessionExecutor {
-  // TODO: also add retry options similarly to postgres_pool
-  Future<R> run<R>(Future<R> Function(PgSession session) fn);
-  Future<R> runTx<R>(Future<R> Function(PgSession session) fn);
+  /// Executa [fn] com uma sessão.
+  ///
+  /// Com [retryOptions], [fn] é executada de novo quando falha com um erro
+  /// aceito por [PgRetryOptions.retryIf].
+  Future<R> run<R>(Future<R> Function(PgSession session) fn,
+      {PgRetryOptions? retryOptions});
+
+  /// Executa [fn] numa transação: `BEGIN`, a função e `COMMIT`; se a função
+  /// lançar um erro, `ROLLBACK` e o erro é relançado.
+  ///
+  /// Na mesma conexão, operações feitas fora de [fn] esperam a transação
+  /// terminar. Com [retryOptions], a transação inteira é repetida quando
+  /// falha com um erro aceito por [PgRetryOptions.retryIf] (por padrão,
+  /// falha de serialização e deadlock).
+  Future<R> runTx<R>(Future<R> Function(PgSession session) fn,
+      {PgRetryOptions? retryOptions});
 }
 
 abstract class PgConnection implements PgSession, PgSessionExecutor {
@@ -255,6 +282,16 @@ class PgSessionSettings {
   /// For an example, see `example/v3/transformer.dart`.
   final StreamChannelTransformer<BaseMessage, BaseMessage>? transformer;
 
+  /// How some types (interval, time, timetz, inet and cidr) are decoded.
+  final DecodingSettings? decodingSettings;
+
+  /// The `application_name` sent in the startup message, if any.
+  final String? applicationName;
+
+  /// Additional session parameters sent in the startup message (for example
+  /// `search_path` or `statement_timeout`), avoiding `SET` commands.
+  final Map<String, String>? startupParameters;
+
   PgSessionSettings({
     this.connectTimeout,
     this.queryTimeout,
@@ -262,15 +299,35 @@ class PgSessionSettings {
     this.encoding,
     this.onBadSslCertificate,
     this.transformer,
+    this.decodingSettings,
+    this.applicationName,
+    this.startupParameters,
   });
 }
 
+/// Configuração de [PgPool] (campos nulos = sem limite, exceto
+/// [maxConnectionCount], cujo padrão é 10).
 class PgPoolSettings {
+  /// Número máximo de conexões abertas ao mesmo tempo (padrão: 10).
   final int? maxConnectionCount;
+
+  /// Uma conexão ociosa por mais tempo que isso é testada (`SELECT 1`) antes
+  /// de ser usada.
   final Duration? idleTestThreshold;
+
+  /// Conexões abertas há mais tempo que isso não são reutilizadas.
   final Duration? maxConnectionAge;
+
+  /// Conexões usadas por mais tempo que isso (somando as sessões) não são
+  /// reutilizadas.
   final Duration? maxSessionUse;
+
+  /// Conexões cujas sessões falharam esse número de vezes não são
+  /// reutilizadas.
   final int? maxErrorCount;
+
+  /// Conexões usadas por esse número de sessões (`run`, `runTx`, `execute`
+  /// ou `withConnection` do pool) não são reutilizadas.
   final int? maxQueryCount;
 
   PgPoolSettings({

@@ -3,11 +3,11 @@ import 'dart:core';
 import 'dart:core' as core;
 import 'dart:typed_data';
 
-import 'package:buffer/buffer.dart';
 import 'package:postgres_fork/src/timezone_settings.dart';
 
 import '../binary_codec.dart';
 import '../text_codec.dart';
+import '../utils/buffer.dart';
 
 /// Describes PostgreSQL's geometric type: `point`.
 class PgPoint {

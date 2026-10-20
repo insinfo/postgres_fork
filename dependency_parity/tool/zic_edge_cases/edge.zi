@@ -1,0 +1,60 @@
+# Casos sinteticos para exercitar caminhos raros do zic (paridade C x Dart).
+
+# Fracoes de segundo (arredondamento para o par) e horarios > 24h.
+Zone	Test/Frac1	0:00:01.5 -	FR1	1990
+			0:00:02.5 -	FR2	2000 Jan 1 0:00:00.51
+			0:00:03.25 -	FR3	2001
+			0:00:04.50001 -	FR4	2002
+			-0:00:05.5 -	FR5
+
+# Regras com dia fixo em janeiro/fevereiro/marco (string TZ com e sem "J").
+Rule	DomR	2000	max	-	Feb	10	2:00	1:00	D
+Rule	DomR	2000	max	-	Jan	5	2:00	0	S
+Zone	Test/Dom	3:00	DomR	X%sT
+Rule	DomM	2000	max	-	Mar	15	26:00	1:00	D
+Rule	DomM	2000	max	-	Oct	3	-1:00	0	S
+Zone	Test/DomM	-3:00	DomM	Y%sT
+
+# Sun>=n e Sun<=n que nao caem no inicio da semana (compat 2013).
+Rule	Geq	2000	max	-	Mar	Sun>=9	1:00u	1:00	-
+Rule	Geq	2000	max	-	Oct	Sat<=20	1:00s	0	-
+Zone	Test/Geq	2:00	Geq	EE%sT
+Rule	Last	2000	max	-	Apr	lastFri	0:00	1:00	S
+Rule	Last	2000	max	-	Oct	lastThu	24:00	0	-
+Zone	Test/Last	2:00	Last	EE%sT
+
+# Horario de verao negativo e o ano todo.
+Rule	Neg	1990	max	-	Oct	lastSun	2:00s	-1:00	GMT
+Rule	Neg	1990	max	-	Mar	lastSun	1:00u	0	IST
+Zone	Test/Neg	1:00	Neg	%s
+Zone	Test/AllDst	-5:00	1:00	EDT
+Zone	Test/AllNegDst	1:00	-1:00	NEG
+Rule	AllYear	2010	max	-	Jan	1	0:00	1:00	D
+Zone	Test/AllYear	4:00	AllYear	A%sT
+
+# %z, formatos com barra e abreviacoes com caracteres especiais.
+Zone	Test/PctZ	5:30	-	%z	1990
+			5:45:30	-	%z	2000
+			-0:30	-	%z	2010
+			-10:00	1:00	%z
+Zone	Test/Slash	-4:00	-	STD/DST	1990 Jun
+			-4:00	1:00	STD/DST	1991
+			-4:00	Geq	A/B
+Zone	Test/Quote	3:00	-	+03
+
+# Regras de um ano so, sufixos de "until" e continuacoes.
+Rule	Once	1995	only	-	May	1	0:00	1:00	D
+Rule	Once	1995	only	-	Sep	1	0:00	0	S
+Rule	Once	2030	2032	-	Feb	Sun>=22	12:00	0:30	H
+Rule	Once	2030	2032	-	Mar	Sun<=29	12:00	0	S
+Zone	Test/Until	-2:00	-	LMT	1900 Jan 1 12:00u
+			-1:00	Once	O%sT	1996 Feb lastSun 2:00s
+			-1:00	Once	P%sT	2031 Mar 3 3:00
+			0:00	-	UTC
+
+# Links encadeados e link sobrescrito.
+Link	Test/Until	Test/LinkA
+Link	Test/LinkA	Test/LinkB
+Link	Test/LinkB	Test/LinkC
+Link	Test/Dom	Test/Twice
+Link	Test/Geq	Test/Twice

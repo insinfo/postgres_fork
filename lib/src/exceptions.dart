@@ -39,7 +39,8 @@ class PostgreSQLException implements Exception {
     code = '';
   }
 
-  @internal
+  /// Uso interno: cria a exceção a partir dos campos de uma mensagem de erro
+  /// do servidor.
   factory PostgreSQLException.fromFields(List<ErrorField> errorFields) {
     return PostgreSQLException._(errorFields);
   }
@@ -139,4 +140,33 @@ class PostgreSQLException implements Exception {
 
     return buff.toString();
   }
+}
+
+/// Códigos SQLSTATE comuns do PostgreSQL, para comparar com
+/// [PostgreSQLException.code] sem depender do texto da mensagem.
+///
+/// Lista completa: https://www.postgresql.org/docs/current/errcodes-appendix.html
+abstract final class PgErrorCode {
+  static const uniqueViolation = '23505';
+  static const foreignKeyViolation = '23503';
+  static const notNullViolation = '23502';
+  static const checkViolation = '23514';
+  static const exclusionViolation = '23P01';
+  static const serializationFailure = '40001';
+  static const deadlockDetected = '40P01';
+  static const lockNotAvailable = '55P03';
+  static const queryCanceled = '57014';
+  static const adminShutdown = '57P01';
+  static const crashShutdown = '57P02';
+  static const cannotConnectNow = '57P03';
+  static const undefinedTable = '42P01';
+  static const undefinedColumn = '42703';
+  static const syntaxError = '42601';
+  static const insufficientPrivilege = '42501';
+  static const invalidTextRepresentation = '22P02';
+  static const divisionByZero = '22012';
+  static const stringDataRightTruncation = '22001';
+  static const numericValueOutOfRange = '22003';
+  static const inFailedSqlTransaction = '25P02';
+  static const idleInTransactionSessionTimeout = '25P03';
 }

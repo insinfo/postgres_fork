@@ -43,11 +43,30 @@ class PostgresTextEncoder extends Converter<Object, String> {
       return _encodePoint(input);
     }
 
+    // Tipos com codificação própria (PgInterval, PgTime, PgTimeTz, PgInet e
+    // tipos definidos pela aplicação).
+    if (input is PostgresTextEncodable) {
+      final text = input.toPostgresText();
+      if (!escapeStrings) return text;
+      final literal = _encodeString(text, true);
+      final type = input.postgresTypeName;
+      return type == null ? literal : '$literal::$type';
+    }
+
+    // Uint8List é o tipo Dart de bytea (o decodificador devolve Uint8List):
+    // codifica no formato hexadecimal de entrada do bytea.
+    if (input is Uint8List) {
+      final hex = StringBuffer(r'\x');
+      for (final byte in input) {
+        hex.write(byte.toRadixString(16).padLeft(2, '0'));
+      }
+      final text = hex.toString();
+      return escapeStrings ? '${_encodeString(text, true)}::bytea' : text;
+    }
+
     if (input is List) {
       return _encodeList(input);
     }
-
-    // TODO: use custom type encoders
 
     throw PostgreSQLException("Could not infer type of value '$input'.");
   }
@@ -247,7 +266,9 @@ class PostgresTextDecoder<T extends Object> extends Converter<Uint8List?, T?> {
       case PgDataType.double:
         return num.parse(asText) as T;
       case PgDataType.boolean:
-        return (asText == 'true') as T;
+        // O formato texto do PostgreSQL é 't'/'f' (antes só 'true' virava
+        // true, então todo booleano do protocolo simples vinha false).
+        return (asText == 't' || asText == 'true') as T;
       default:
         throw UnimplementedError(
             'Text decoding for $_dataType and value $asText');
