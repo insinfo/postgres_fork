@@ -19,7 +19,10 @@ ENV TZ=America/Sao_Paulo
 # Instalar pacotes necessários e configurar o locale pt_BR.CP1252
 # Os comandos são executados como root por padrão no Dockerfile
 # ---------- pacotes + locale CP1252 ----------
-RUN apt-get update && \
+# The PGDG bullseye repository was archived (404); the packages come from
+# Debian.
+RUN rm -f /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
     apt-get install -y locales tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \

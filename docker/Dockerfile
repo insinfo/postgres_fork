@@ -2,6 +2,9 @@ FROM postgres:14.3
 ADD pg_hba.conf /var/lib/postgresql/data/
 ADD postgresql.conf /var/lib/postgresql/data/
 COPY init.sql /docker-entrypoint-initdb.d/
+# The PGDG bullseye repository was archived (404); tzdata and locales come
+# from Debian.
+RUN rm -f /etc/apt/sources.list.d/pgdg.list
 RUN apt-get update 
 RUN apt-get -y install tzdata 
 RUN apt-get -y install locales

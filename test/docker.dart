@@ -16,7 +16,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=GMT
 
 # ---------- pacotes + locale (inglês) ----------
-RUN apt-get update && \
+# The PGDG bullseye repository was archived (404); the packages come from
+# Debian.
+RUN rm -f /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
     apt-get install -y locales tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
