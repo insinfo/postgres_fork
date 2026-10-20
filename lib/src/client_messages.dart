@@ -91,7 +91,8 @@ class StartupMessage extends ClientMessage {
     if (encoding is Utf8Codec) {
       encodingString = [...utf8.encode('UTF8')];
     } else if (encoding is AsciiCodec) {
-      encodingString = [...utf8.encode('ascii')];
+      // 'ascii' não é um nome de encoding do PostgreSQL: a conexão era recusada.
+      encodingString = [...utf8.encode('SQL_ASCII')];
     } else if (encoding is Latin1Codec) {
       encodingString = [...utf8.encode('ISO-8859-1')];
     } else if (encoding.name == 'windows-1252') {

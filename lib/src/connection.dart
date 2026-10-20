@@ -366,6 +366,10 @@ class PostgreSQLConnection extends Object
     }
 
     final proxy = _TransactionProxy(this, queryBlock, commitTimeoutInSeconds);
+    // Se o BEGIN falhar (por exemplo, a conexão foi fechada com a transação
+    // na fila), o erro é lançado abaixo e proxy.future também falha: sem
+    // isto, esse segundo erro ficava sem tratamento.
+    proxy.future.ignore();
 
     await _enqueue(proxy._beginQuery);
 
@@ -427,7 +431,16 @@ class PostgreSQLConnection extends Object
     // and the state node managing delivering data to the query no longer exists. Therefore,
     // as soon as a close occurs, we detach the data stream from anything that actually does
     // anything with that data.
-    _framer.addBytes(castBytes(bytes));
+    try {
+      _framer.addBytes(castBytes(bytes));
+    } catch (e, st) {
+      // Uma mensagem que não pode ser lida (por exemplo, texto que o
+      // encoding da conexão não decodifica) deixa o framer fora de
+      // sincronia: a conexão é fechada com o erro, em vez de o erro escapar
+      // sem tratamento e as consultas ficarem esperando.
+      _close(e, st);
+      return;
+    }
     while (_framer.hasMessage) {
       final msg = _framer.popMessage();
       try {
@@ -435,7 +448,26 @@ class PostgreSQLConnection extends Object
           _messages.add(msg);
         }
         if (msg is ErrorResponseMessage) {
+          final state = _connectionState;
+          final exception = PostgreSQLException._(msg.fields);
+          if ((exception.severity == PostgreSQLSeverity.fatal ||
+                  exception.severity == PostgreSQLSeverity.panic) &&
+              (state is _PostgreSQLConnectionStateIdle ||
+                  state is _PostgreSQLConnectionStateBusy ||
+                  state is _PostgreSQLConnectionStateReadyInTransaction)) {
+            // O servidor vai encerrar a conexão (por exemplo,
+            // pg_terminate_backend): a consulta em execução e as que estão
+            // na fila (inclusive as de uma transação) falham na hora com o
+            // erro do servidor. Antes, as da transação esperavam o timeout.
+            _close(exception);
+            return;
+          }
           _transitionToState(_connectionState.onErrorResponse(msg));
+        } else if (msg is ParameterStatusMessage) {
+          // Mudanças feitas depois da conexão (SET application_name, SET
+          // TimeZone...) também atualizam [settings].
+          settings[msg.name] = msg.value;
+          _transitionToState(_connectionState.onMessage(msg));
         } else if (msg is NotificationResponseMessage) {
           _notifications
               .add(Notification(msg.processID, msg.channel, msg.payload));
@@ -650,18 +682,18 @@ class _OidCache {
       _PostgreSQLExecutionContextMixin c, List<int> oids) async {
     _queryCount++;
     final unresolvedIDString = oids.join(',');
-    final orderedTableNames = await c._query(
-      "SELECT relname FROM pg_class WHERE relkind='r' AND oid IN ($unresolvedIDString) ORDER BY oid ASC",
+    final tableNames = await c._query(
+      "SELECT oid::int8, relname FROM pg_class WHERE relkind='r' AND oid IN ($unresolvedIDString)",
       placeholderIdentifier: PlaceholderIdentifier.atSign,
       allowReuse: false, // inlined OIDs would make it difficult anyway
       resolveOids: false,
     );
 
-    final iterator = oids.iterator;
-    for (final tableName in orderedTableNames) {
-      iterator.moveNext();
-      if (tableName.first != null) {
-        _tableOIDNameMap[iterator.current] = tableName.first as String;
+    // Associa pelo OID: antes os nomes eram associados pela posição, e um
+    // OID sem linha (uma view, por exemplo) deslocava os nomes dos demais.
+    for (final row in tableNames) {
+      if (row[1] != null) {
+        _tableOIDNameMap[row[0] as int] = row[1] as String;
       }
     }
   }
@@ -997,6 +1029,16 @@ abstract mixin class _PostgreSQLExecutionContextMixin
           }
         }
         _queue.remove(query);
+        if (query.statementIdentifier != null &&
+            e is PostgreSQLException &&
+            (e.code == '26000' || e.code == '0A000')) {
+          // O prepared statement não existe mais no servidor (DEALLOCATE,
+          // DISCARD ALL, pooler) ou o plano dele não vale mais (ALTER TABLE
+          // mudou o tipo do resultado: "cached plan must not change result
+          // type"). Antes ele ficava no cache e toda execução seguinte
+          // falhava; agora a próxima o prepara de novo.
+          _connection._cache.invalidate(query.statement);
+        }
         await _onQueryError(query, e, st);
         rethrow;
       }

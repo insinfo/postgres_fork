@@ -123,17 +123,18 @@ void main() {
         .buffer
         .asUint8List();
 
-    test('interval: Duration por padrão e PgInterval opcional', () {
+    test('interval: PgInterval por padrão e Duration opcional', () {
       final byDefault = PostgresBinaryDecoder(1186, utf8, settings);
       expect(byDefault.convert(interval(3600000000, 0, 0)),
-          const Duration(hours: 1));
-      expect(() => byDefault.convert(interval(0, 1, 0)),
-          throwsA(isA<UnimplementedError>()));
-      final asInterval = PostgresBinaryDecoder(1186, utf8, settings,
-          decoding:
-              const DecodingSettings(interval: IntervalDecoding.pgInterval));
-      expect(asInterval.convert(interval(5, 2, 1)),
+          const PgInterval(microseconds: 3600000000));
+      expect(byDefault.convert(interval(5, 2, 1)),
           const PgInterval(months: 1, days: 2, microseconds: 5));
+      final asDuration = PostgresBinaryDecoder(1186, utf8, settings,
+          decoding: const DecodingSettings(interval: IntervalDecoding.duration));
+      expect(asDuration.convert(interval(3600000000, 0, 0)),
+          const Duration(hours: 1));
+      expect(() => asDuration.convert(interval(0, 1, 0)),
+          throwsA(isA<UnimplementedError>()));
     });
 
     test('time nos três modos', () {

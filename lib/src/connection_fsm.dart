@@ -351,8 +351,26 @@ class _PostgreSQLConnectionStateBusy extends _PostgreSQLConnectionState {
       return _PostgreSQLConnectionStateIdle();
     } else if (message is CommandCompleteMessage) {
       rowsAffected = message.rowsAffected;
+      final tag = message.commandTag;
+      if (tag == 'DISCARD ALL' || tag == 'DEALLOCATE ALL') {
+        // O servidor removeu todos os prepared statements (inclusive o
+        // desta consulta, se for um): o cache não vale mais.
+        connection!._cache.clear();
+        query.cache = null;
+      }
     } else if (message is RowDescriptionMessage) {
+      if (query.useSendSimple) {
+        // Protocolo simples com vários comandos: o resultado é o do último
+        // que devolve linhas (como no libpq). Antes as linhas de todos
+        // ficavam juntas com a descrição de colunas do último.
+        query.rows.clear();
+      }
       query.fieldDescriptions = message.fieldDescriptions;
+    } else if (message is NoDataMessage) {
+      // Comando sem linhas (DDL, SET, INSERT sem RETURNING...): sem isto o
+      // statement nunca era considerado válido pelo cache e cada execução
+      // com allowReuse preparava um novo statement nomeado no servidor.
+      query.fieldDescriptions ??= const [];
     } else if (message is DataRowMessage) {
       if (decodeError == null) {
         try {

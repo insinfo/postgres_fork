@@ -6,6 +6,7 @@ import 'package:postgres_fork/src/timezone_settings.dart';
 
 import 'decimal.dart';
 import 'decoding_settings.dart';
+import 'pg_binary_text.dart';
 import 'pg_values.dart';
 import 'timezone/timestamptz.dart';
 import 'types.dart';
@@ -125,8 +126,15 @@ class PostgresBinaryEncoder<T extends Object>
       case PgDataType.date:
         {
           if (input is DateTime) {
+            // A data do próprio DateTime (como no formato texto). Antes era
+            // a data em UTC, truncada em direção a zero: antes de 2000, um
+            // horário depois da meia-noite virava o dia seguinte.
             final bd = ByteData(4);
-            bd.setInt32(0, input.toUtc().difference(DateTime.utc(2000)).inDays);
+            bd.setInt32(
+                0,
+                DateTime.utc(input.year, input.month, input.day)
+                    .difference(DateTime.utc(2000))
+                    .inDays);
             return bd.buffer.asUint8List();
           }
           throw FormatException(
@@ -549,8 +557,17 @@ PgDecimal decodePgDecimal(Uint8List value) {
 }
 
 class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
-  const PostgresBinaryDecoder(this.typeCode, this.encoding, this.timeZone,
-      {this.decoding = const DecodingSettings()});
+  PostgresBinaryDecoder(this.typeCode, this.encoding, this.timeZone,
+      {this.decoding = const DecodingSettings()})
+      : _dataType = typeMap[typeCode],
+        _isText = _textOids.contains(typeCode);
+
+  /// [typeMap] for [typeCode], looked up once per column: [convert] runs for
+  /// every value and used to look it up every time.
+  final PostgreSQLDataType? _dataType;
+
+  /// A text type ([_textOids]): decoded before anything else.
+  final bool _isText;
 
   final int typeCode;
   final Encoding encoding;
@@ -558,17 +575,26 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
   final DecodingSettings decoding;
 
   /// Indica se o tipo [oid] é decodificado diretamente pelo OID (time,
-  /// timetz, inet, cidr e arrays).
+  /// timetz, inet, cidr, oid e tipos derivados, e arrays).
   static bool decodesByOid(int oid) =>
-      _extendedOids.contains(oid) || _arrayTypes.containsKey(oid);
+      _extendedOids.contains(oid) ||
+      _arrayTypes.containsKey(oid) ||
+      _oidLikeTypes.contains(oid) ||
+      oid == _macaddrOid ||
+      oid == _macaddr8Oid ||
+      oid == _moneyOid;
 
   @override
   T? convert(Uint8List? input) {
     if (input == null) {
       return null;
     }
+    // text, varchar, name, bpchar, "char", xml: no ByteData and no switch.
+    // bpchar (char(n)) has no PostgreSQLDataType: it went through every
+    // check of the less common types before being decoded.
+    if (_isText) return encoding.decode(input) as T;
 
-    final dataType = typeMap[typeCode];
+    final dataType = _dataType;
 
     final buffer =
         ByteData.view(input.buffer, input.offsetInBytes, input.lengthInBytes);
@@ -661,6 +687,9 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
             return PgInterval(
                 months: months, days: days, microseconds: microseconds) as T;
           }
+          if (decoding.interval == IntervalDecoding.text) {
+            return PgBinaryText.interval(months, days, microseconds) as T;
+          }
           if (days != 0 || months != 0) {
             final value = PgInterval(
                 months: months, days: days, microseconds: microseconds);
@@ -713,6 +742,10 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         }
 
       case PostgreSQLDataType.point:
+        if (decoding.extendedTypes == ExtendedTypeDecoding.text) {
+          return PgBinaryText.point(buffer.getFloat64(0), buffer.getFloat64(8))
+              as T;
+        }
         return PgPoint(buffer.getFloat64(0), buffer.getFloat64(8)) as T;
 
       // Arrays de tipos primitivos: leitura direta do buffer (caminho rápido).
@@ -741,22 +774,64 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
         }) as T;
 
       default:
-        {
-          // Tipos sem entrada em PostgreSQLDataType (time, timetz, inet,
-          // cidr) e os demais arrays.
-          final extended = _decodeByOid(input);
-          if (!identical(extended, _notHandled)) return extended as T?;
+        // In its own method: the code for the less common types made
+        // `convert` (run for every value) large enough to slow the common
+        // types down (about 3% on a 100-row result).
+        return _decodeOther(input, buffer) as T?;
+    }
+  }
 
-          // We'll try and decode this as a utf8 string and return that
-          // for many internal types, this is valid. If it fails,
-          // we just return the bytes and let the caller figure out what to
-          // do with it.
-          try {
-            return encoding.decode(input) as T;
-          } catch (_) {
-            return input as T;
-          }
-        }
+  /// The types without a [PostgreSQLDataType] entry.
+  @pragma('vm:never-inline')
+  Object? _decodeOther(Uint8List input, ByteData buffer) {
+    // oid e tipos derivados (regclass, regtype, xid...): inteiros sem
+    // sinal de 4 bytes. Antes viravam uma String com os bytes.
+    if (_oidLikeTypes.contains(typeCode)) {
+      return buffer.getUint32(0);
+    }
+    // macaddr e macaddr8: o texto canônico do PostgreSQL
+    // ('08:00:2b:01:02:03'). Antes viravam uma String com os bytes.
+    if (typeCode == _macaddrOid || typeCode == _macaddr8Oid) {
+      return input
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join(':');
+    }
+    // money: int64 na menor unidade da moeda. Devolvido como texto
+    // decimal exato com 2 casas (o padrão do lc_monetary em
+    // praticamente todos os locales), sem o símbolo da moeda. Antes
+    // vinham os bytes.
+    if (typeCode == _moneyOid) {
+      return _decodeMoney(buffer.getInt64(0));
+    }
+
+    // Tipos sem entrada em PostgreSQLDataType (time, timetz, inet,
+    // cidr) e os demais arrays.
+    final extended = _decodeByOid(input);
+    if (!identical(extended, _notHandled)) return extended;
+
+    // Geometric types, bit strings, tsvector, ranges and their
+    // arrays: the server's text. They came back as their bytes or, when
+    // the bytes happened to be valid UTF-8, as garbage ('ab' for the
+    // tsvector 'a' 'b', '' for the int4range [1,5)).
+    if (PgBinaryText.formats(typeCode)) {
+      final text = PgBinaryText.scalar(typeCode, input);
+      if (text != null) return text;
+      final list = PgBinaryText.array(typeCode, input);
+      if (list != null) return list;
+    }
+    // Arrays of user-defined types (enum[]): the array literal
+    // ('{ok,sad}'). They came back as bytes.
+    final literal = PgBinaryText.arrayLiteral(input, encoding);
+    if (literal != null) return literal;
+
+    // We'll try and decode this as a utf8 string and return that
+    // for many internal types, this is valid. If it fails,
+    // we just return the bytes and let the caller figure out what to
+    // do with it.
+    try {
+      return encoding.decode(input);
+    } catch (_) {
+      return input;
     }
   }
 
@@ -780,6 +855,13 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
     if (_extendedOids.contains(array.elementOid) &&
         decoding.extendedTypes == ExtendedTypeDecoding.bytes) {
       return input;
+    }
+    // Elements decoded as text: a List<String>, not a List<Object>.
+    final element = array.elementOid;
+    if ((decoding.extendedTypes == ExtendedTypeDecoding.text &&
+            (_extendedOids.contains(element) || element == 600)) ||
+        (decoding.interval == IntervalDecoding.text && element == 1186)) {
+      return _readArray<String>(input, element);
     }
     return array.read(this, input);
   }
@@ -819,13 +901,23 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
     final reader = ByteDataReader()..add(data);
     final dimensions = reader.readInt32();
     if (dimensions != 1) {
-      return dimensions == 0 ? <V>[] : _readArray<V>(data, elementOid);
+      if (dimensions == 0) return decoding.nullableArrays ? <V?>[] : <V>[];
+      return _readArray<V>(data, elementOid);
     }
     reader.readInt32(); // flags (indica se há NULL)
     reader.readInt32(); // OID do elemento
     final count = reader.readInt32();
     reader.readInt32(); // limite inferior
 
+    if (decoding.nullableArrays) {
+      return <V?>[
+        for (var i = 0; i < count; i++)
+          switch (reader.readInt32()) {
+            final length when length < 0 => null,
+            final length => element(reader, length),
+          },
+      ];
+    }
     final values = <V>[];
     for (var i = 0; i < count; i++) {
       final length = reader.readInt32();
@@ -856,7 +948,7 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
     final dimensions = reader.readInt32();
     reader.readInt32(); // flags (indica se há NULL)
     reader.readInt32(); // OID do elemento
-    if (dimensions == 0) return <V>[];
+    if (dimensions == 0) return decoding.nullableArrays ? <V?>[] : <V>[];
     final sizes = <int>[];
     for (var i = 0; i < dimensions; i++) {
       sizes.add(reader.readInt32());
@@ -883,7 +975,7 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
           values[i] = value as V;
         }
       }
-      return hasNull ? values : List<V>.from(values);
+      return hasNull || decoding.nullableArrays ? values : List<V>.from(values);
     }
 
     return build(0);
@@ -958,10 +1050,13 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
       intPart += '0000' * (weight + 1);
     }
 
-    var result = '$sign${intPart.replaceAll(_leadingZerosRegExp, '')}';
+    var result = intPart.replaceAll(_leadingZerosRegExp, '');
     if (result.isEmpty) {
-      result = '0'; // Show at least 0, if no int value is given.
+      // Show at least 0, if no int value is given (antes '-0.5' virava
+      // '-.5', porque o sinal já estava em result).
+      result = '0';
     }
+    result = '$sign$result';
     if (dScale > 0) {
       // Only add fractional digits, if dScale allows
       result += '.${fractPart.padRight(dScale, '0').substring(0, dScale)}';
@@ -971,6 +1066,26 @@ class PostgresBinaryDecoder<T> extends Converter<Uint8List?, T?> {
 }
 
 const _notHandled = Object();
+
+/// oid, regproc, xid, cid, regprocedure, regoper, regoperator, regclass,
+/// regtype, regconfig, regdictionary, regnamespace, regrole e regcollation.
+/// Text types: text, varchar, name, bpchar, "char", xml.
+const _textOids = {25, 1043, 19, 1042, 18, 142};
+
+const _macaddrOid = 829;
+const _macaddr8Oid = 774;
+const _moneyOid = 790;
+
+String _decodeMoney(int value) {
+  final amount = BigInt.from(value);
+  final abs = amount.abs();
+  final cents = (abs % BigInt.from(100)).toString().padLeft(2, '0');
+  return '${amount.isNegative ? '-' : ''}${abs ~/ BigInt.from(100)}.$cents';
+}
+
+const _oidLikeTypes = {
+  26, 24, 28, 29, 2202, 2203, 2204, 2205, 2206, 3734, 3769, 4089, 4096, 4191
+};
 
 const _numericArrayOid = 1231;
 
@@ -1014,4 +1129,10 @@ const Map<int, _ArrayType> _arrayTypes = {
   1270: _ArrayType<Object>(_timeTzOid), // timetz[]
   1041: _ArrayType<Object>(_inetOid), // inet[]
   651: _ArrayType<Object>(_cidrOid), // cidr[]
+  1028: _ArrayType<int>(26), // oid[]
+  22: _ArrayType<int>(21), // int2vector (pg_index.indkey)
+  30: _ArrayType<int>(26), // oidvector
+  1040: _ArrayType<String>(_macaddrOid), // macaddr[]
+  775: _ArrayType<String>(_macaddr8Oid), // macaddr8[]
+  791: _ArrayType<String>(_moneyOid), // money[]
 };

@@ -114,9 +114,10 @@ void main() {
       ]);
     }
 
-    test('interval: Duration por padrão; com meses/dias, erro controlado',
+    test('interval como Duration (opcional); com meses/dias, erro controlado',
         () async {
-      await openWith(const DecodingSettings());
+      await openWith(
+          const DecodingSettings(interval: IntervalDecoding.duration));
       expect((await conn.query("SELECT '3 hours'::interval")).first.first,
           const Duration(hours: 3));
       for (final value in ['1 day 02:00:00', '1 mon', '-1 day']) {
@@ -276,7 +277,7 @@ void main() {
       expect(row[11], ['a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11']);
       expect(row[12], [PgTime(13), null]);
       expect(row[13].toString(), '[1.2.3.4/8]');
-      expect(row[14], [const Duration(hours: 1)]);
+      expect(row[14], [const PgInterval(microseconds: 3600000000)]);
       expect(row[15], [1, null]);
       expect(row[16], [
         {'a': 1}
@@ -286,7 +287,8 @@ void main() {
     test(
         'a conexão continua utilizável após erro de decodificação dentro '
         'de uma transação', () async {
-      await openWith(const DecodingSettings());
+      await openWith(
+          const DecodingSettings(interval: IntervalDecoding.duration));
       await expectLater(conn.transaction((ctx) async {
         await ctx.query("SELECT '1 day'::interval");
       }), throwsA(isA<UnimplementedError>()));
@@ -314,14 +316,14 @@ void main() {
               'ARRAY[1,NULL,3]::int[], '
               "ARRAY['2024-01-02'::date]::date[]"),
           [
-            const Duration(hours: 3),
+            const PgInterval(microseconds: 3 * 3600000000),
             PgTime(13, 45, 10, 500000),
             isA<PgInet>(),
             [1, null, 3],
             [DateTime.utc(2024, 1, 2)],
           ]);
-      await expectLater(binaryRow(conn, "'1 mon'::interval"),
-          throwsA(isA<UnimplementedError>()));
+      expect(await binaryRow(conn, "'1 mon'::interval"),
+          [const PgInterval(months: 1)]);
       expect(await conn.execute('SELECT 1'), [
         [1]
       ]);
@@ -350,12 +352,14 @@ void main() {
       ]);
     });
 
-    test('protocolo simples (texto): tipo não suportado falha só a consulta',
+    test('protocolo simples (texto): tipo sem decodificador de texto vira String',
         () async {
       final conn = await _v3();
       addTearDown(conn.close);
-      await expectLater(conn.execute("SELECT '1 mon'::interval"),
-          throwsA(isA<UnimplementedError>()));
+      // Antes falhava com UnimplementedError.
+      expect(await conn.execute("SELECT '1 mon'::interval"), [
+        ['1 mon']
+      ]);
       expect(await conn.execute('SELECT 1'), [
         [1]
       ]);

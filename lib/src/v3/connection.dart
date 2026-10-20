@@ -11,6 +11,7 @@ import '../auth/auth.dart';
 import '../binary_codec.dart';
 
 import '../query.dart';
+import '../text_codec.dart';
 import '../utils/ascii.dart';
 import '../utils/operation_lock.dart';
 import '../utils/stream_channel.dart';
@@ -336,22 +337,31 @@ class PgConnectionImplementation implements PgConnection {
 
   /// Espera a transação em andamento terminar. Usado pelas operações feitas
   /// de fora da transação, para que não sejam executadas dentro dela.
-  Future<void> _waitForTransaction() async {
-    while (_activeTransaction != null) {
+  ///
+  /// Sem transação, a operação começa já (sem esperar um evento): assim ela
+  /// entra na fila antes de um [close] chamado logo depois. Antes ela
+  /// falhava com "connection was closed" em vez de ser executada.
+  Future<void>? _waitForTransaction() {
+    if (_activeTransaction == null) return null;
+    return Future.doWhile(() async {
+      if (_activeTransaction == null) return false;
       await _activeTransaction!.future;
-    }
+      return true;
+    });
   }
 
   @override
   Future<PgStatement> prepare(Object query, {Duration? timeout}) async {
-    await _waitForTransaction();
+    final wait = _waitForTransaction();
+    if (wait != null) await wait;
     return _prepare(query, timeout: timeout);
   }
 
   @override
   Future<PgResult> execute(Object query,
       {Object? parameters, Duration? timeout}) async {
-    await _waitForTransaction();
+    final wait = _waitForTransaction();
+    if (wait != null) await wait;
     return _execute(query, parameters: parameters, timeout: timeout);
   }
 
@@ -550,6 +560,7 @@ class _PgResultStreamSubscription
   final StreamSubscription<PgResultRow> _source;
 
   final Completer<int> _affectedRows = Completer();
+  int _lastAffectedRows = 0;
   final Completer<PgResultSchema> _schema = Completer();
   final Completer<void> _done = Completer();
   PgResultSchema? _resultSchema;
@@ -562,15 +573,26 @@ class _PgResultStreamSubscription
       : connection = statement.statement._connection {
     connection._operationLock.withResource(() async {
       if (connection._isClosed) return _failClosed();
+      final List<ParameterValue> values;
+      try {
+        values = [
+          for (final parameter in statement.parameters)
+            ParameterValue.binary(parameter.value, parameter.type,
+                connection._settings.encoding, connection._settings.timeZone)
+        ];
+      } catch (e, st) {
+        // Valor que não pode ser codificado (por exemplo, uma String num
+        // parâmetro int): antes o erro escapava sem tratamento e quem
+        // esperava o resultado ficava esperando para sempre.
+        _controller.addError(e, st);
+        return handleMessage(
+            ReadyForQueryMessage(Uint8List.fromList([0x49]), utf8));
+      }
       connection._pending = this;
 
       connection._channel.sink.add(AggregatedClientMessage([
         BindMessage(
-          [
-            for (final parameter in statement.parameters)
-              ParameterValue.binary(parameter.value, parameter.type,
-                  connection._settings.encoding, connection._settings.timeZone)
-          ],
+          values,
           portalName: _portalName,
           statementName: statement.statement._name,
           encoding: connection._settings.encoding,
@@ -632,7 +654,11 @@ class _PgResultStreamSubscription
             binaryEncoding: field.formatCode != 0,
           ),
       ]);
-      _schema.complete(schema);
+      // Vários comandos numa consulta simples: cada linha leva o esquema do
+      // próprio comando; [schema] é o do primeiro. Antes o segundo
+      // RowDescription (ou CommandComplete) lançava "Future already
+      // completed" sem tratamento.
+      if (!_schema.isCompleted) _schema.complete(schema);
     } else if (message is DataRowMessage) {
       final schema = _resultSchema!;
 
@@ -654,10 +680,19 @@ class _PgResultStreamSubscription
                     decoderOid, settings.encoding, settings.timeZone,
                     decoding: settings.decoding)
                 .convert(message.values[i]));
-          } else {
+          } else if (PostgresTextDecoder.supports(type)) {
             columnValues.add(type
                 .textCodec(connection._settings.encoding)
                 .decode(message.values[i]));
+          } else {
+            // Consultas sem parâmetros usam o protocolo simples (formato
+            // texto): date, timestamptz, numeric, uuid, json... chegam
+            // como a String do PostgreSQL (antes a consulta falhava com
+            // UnimplementedError).
+            final value = message.values[i];
+            columnValues.add(value == null
+                ? null
+                : connection._settings.encoding.decode(value));
           }
         }
       } catch (e, st) {
@@ -671,7 +706,8 @@ class _PgResultStreamSubscription
       final row = _ResultRow(schema, columnValues);
       _controller.add(row);
     } else if (message is CommandCompleteMessage) {
-      _affectedRows.complete(message.rowsAffected);
+      // Com vários comandos, vale o último (como no protocolo v2).
+      _lastAffectedRows = message.rowsAffected;
     } else if (message is ReadyForQueryMessage) {
       _done.complete();
       if (identical(connection._pending, this)) connection._pending = null;
@@ -680,7 +716,7 @@ class _PgResultStreamSubscription
       // after the query is done, even if we didn't get a row description
       // message.
       if (!_affectedRows.isCompleted) {
-        _affectedRows.complete(0);
+        _affectedRows.complete(_lastAffectedRows);
       }
       if (!_schema.isCompleted) {
         _schema.complete(PgResultSchema(const []));

@@ -65,6 +65,24 @@ class QueryCache {
     return string;
   }
 
+  /// Remove o statement de [sql] do cache (por exemplo, o servidor
+  /// respondeu que ele não existe mais ou que o plano em cache não vale mais
+  /// depois de um `ALTER TABLE`). Ele é fechado no servidor antes do próximo
+  /// `Parse`, e a próxima execução de [sql] o prepara de novo.
+  void invalidate(String sql) {
+    final removed = _queries.remove(sql);
+    if (removed != null) {
+      _pendingCloses.add(removed.preparedStatementName!);
+    }
+  }
+
+  /// Esquece todos os statements: o servidor já os removeu (`DISCARD ALL`,
+  /// `DEALLOCATE ALL`).
+  void clear() {
+    _queries.clear();
+    _pendingCloses.clear();
+  }
+
   /// Nomes de statements removidos do cache que ainda precisam ser fechados
   /// no servidor. A lista é esvaziada.
   List<String> takePendingCloses() {

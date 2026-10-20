@@ -2,6 +2,125 @@
 
 ## 3.0.0
 
+- `DecodingSettings`: `IntervalDecoding.text` (the server's interval text,
+  `'1 day 02:03:04'`), `ExtendedTypeDecoding.text` now also covers `point`
+  (`'(1,2)'`), and `nullableArrays: true` makes every array a `List<T?>` (by
+  default an array without NULL is a `List<T>` and one with NULL a
+  `List<T?>`, so the type of a column changes with its content). Arrays of
+  the types decoded as text are `List<String>`.
+- Performance: the data type of a column is looked up once, not for every
+  value (`typeMap` was a `Map` lookup per value), and text values (`text`,
+  `varchar`, `name`, `char(n)`, `"char"`, `xml`) are decoded before any
+  other check. `char(n)` had no fast path and went through every check of the
+  less common types. A 1000-row result of int/char/timestamp columns decodes
+  about 5% faster than 2.8.5.
+
+- **Bug fix**: geometric types (`lseg`, `box`, `line`, `path`, `polygon`,
+  `circle`), `bit`/`varbit`, `tsvector`, ranges and their arrays came back as
+  their binary bytes or, when those happened to be valid UTF-8, as garbage
+  (`'ab'` for the tsvector `'a' 'b'`, `''` for the int4range `[1,5)`). They
+  are now the server's text (`'(3,4),(1,2)'`, `'101'`, `"'a' 'b'"`,
+  `'[1,5)'`); arrays are lists of texts. Arrays of user-defined types
+  (`enum[]`) are the array literal (`'{ok,sad}'`); they were bytes. A
+  `tstzrange` bound is printed in UTC (`+00`).
+
+- **Breaking change**: `interval` values (and `interval[]` elements) are now
+  always decoded as `PgInterval` (months, days, microseconds; `==`,
+  `hashCode`, `toDuration()`, and `toString()` equal to the server's text
+  with the default `IntervalStyle` `postgres`). Previously the default was
+  `Duration`, and any interval with days or months (`'1 day'`) failed with
+  `UnimplementedError`. `DecodingSettings(interval: IntervalDecoding.duration)`
+  restores the old behavior. `Duration` and `PgInterval` are both accepted as
+  parameters, now also without a type (`@x`, `?`, simple protocol).
+- `macaddr`, `macaddr8` (and their arrays) are decoded to the server's
+  canonical text (`'08:00:2b:01:02:03'`); previously the binary bytes came
+  back as a garbage `String`. `money` (and `money[]`) is decoded to the exact
+  amount as a decimal `String` with 2 fraction digits (`'12.34'`, `'-0.05'`,
+  `'0.00'`), without the currency symbol; previously the raw bytes. The
+  scale of `money` follows `lc_monetary` on the server; 2 is the PostgreSQL
+  default for practically all locales. The text path (simple protocol) still
+  returns the server's text (for `money`, the locale text, e.g. `R$ 12,34`).
+- `oid` and the `reg*` types (`regclass`, `regtype`...), `xid`, `cid`,
+  `oid[]`, `oidvector` and `int2vector` (e.g. `pg_index.indkey`) are decoded
+  as `int`s; previously a `String` (or `Uint8List`) with the binary bytes.
+- **Bug fix**: a connection terminated by the server (`pg_terminate_backend`,
+  shutdown) while a query of a `transaction()` was running left that query,
+  the transaction's queued queries and the transaction itself waiting for the
+  query timeout. All queued callers now fail at once with the server's error
+  (`57P01`); callers outside a transaction also get that error instead of a
+  generic "connection closing" message.
+- **Bug fix**: a transaction queued when the connection was closed produced an
+  extra unhandled asynchronous error.
+- **Bug fix**: the statement cache was never refreshed: after `ALTER TABLE`
+  changed a cached query's result (`0A000`, "cached plan must not change
+  result type"), or after the prepared statement was removed (`DEALLOCATE`,
+  `DISCARD ALL`, a pooler; `26000`), every later execution of that SQL failed.
+  The failing statement is now dropped from the cache (the next execution
+  prepares it again), and `DISCARD ALL`/`DEALLOCATE ALL` run on the connection
+  clear the cache.
+- **Bug fix**: `query()` (with the default `allowReuse`) of a command without
+  rows (`INSERT` without `RETURNING`, `UPDATE`, `DELETE`, DDL, `SET`...)
+  prepared a new named statement on the server at every call (they were never
+  cached), leaking prepared statements.
+- **Bug fix**: `query(..., useSimpleQueryProtocol: true)` with several
+  statements mixed the rows of all of them with the column description of the
+  last one (`toColumnMap()` threw `RangeError`). The result is now the last
+  result set, as in libpq (`affectedRowCount` was already the last one's).
+- **Bug fix**: `PostgreSQLConnection.settings` was not updated after the
+  connection was opened; it now follows `ParameterStatus` messages (`SET
+  application_name`, `SET TimeZone`, ...).
+- **Bug fix**: non-ASCII column names were decoded byte by byte
+  (`"descrição"` came back as `"descriÃ§Ã£o"`), in both APIs.
+- **Bug fix**: `mappedResultsQuery` associated table names by position: when
+  a result had a column of a view (or another relation that is not a plain
+  table) with a smaller OID, the names of the tables were shifted.
+- **Bug fix**: `numeric` values between -1 and 0 were decoded without the
+  leading zero (`'-0.5'` came back as `'-.5'`).
+- **Bug fix**: a `date` parameter (`@d:date`) was encoded from the UTC date,
+  truncated towards zero: before 2000 any time after midnight became the next
+  day (`1999-12-31 12:00` → `2000-01-01`), and a local `DateTime` could
+  become another day. The date of the `DateTime` itself is used (as in the
+  text path).
+- **Bug fix**: text encoding of parameters and of values written into the SQL
+  (untyped `@x`, `?` and the simple protocol):
+  - `NaN`/`Infinity` were sent as `'nan'` (with quotes) and rejected (22P02),
+    also inside arrays;
+  - BC dates were one year off (`DateTime` year -43, i.e. 44 BC, was sent as
+    43 BC) and year 0 (1 BC) was rejected;
+  - in the SQL text, negative numbers are now parenthesized: `5-@x` with
+    `x = -1` became the comment `5--1`, and `@x::int2` with -32768 was out of
+    range; `-0.0` keeps its sign (`'-0'::float8`);
+  - lists and `PgPoint` written into the SQL were not quoted (syntax error /
+    read as a record);
+  - `null` elements of lists were not supported: `['a', null]` was sent as
+    `{"\"a\"","null"}` (wrong data); they are now `NULL`;
+  - `Duration` without a type failed with "Could not infer type".
+- **Bug fix**: `@x::type1::type2` (more than one cast after a placeholder)
+  became `$1::type1type2`.
+- **Bug fix**: the error severity is read from the non-localized `V` field
+  (PostgreSQL 9.6+), so `lc_messages` translations (e.g. `FEHLER`, `PÂNICO`)
+  no longer make errors `unknown` and `FATAL`/`PANIC` are always recognized.
+- **Bug fix**: `PostgreSQLConnection(encoding: ascii)` sent `client_encoding`
+  `ascii`, which the server rejects; it now sends `SQL_ASCII`. A server
+  message that the connection's encoding cannot decode no longer throws an
+  unhandled exception from the socket listener (leaving queries waiting): the
+  connection is closed with that error. Error messages that cannot be decoded
+  fall back to lenient UTF-8.
+- **Bug fix** (v3 experimental API):
+  - a query with several statements (`execute('SELECT 1; SELECT 2')`, or DDL
+    followed by `INSERT`) threw an unhandled "Future already completed";
+    rows of all statements are returned (each with its own schema) and
+    `affectedRows` is the last statement's;
+  - a parameter that cannot be encoded (e.g. a `String` for an `int`) threw an
+    unhandled error and the call never completed (the prepared statement also
+    leaked); the call now fails with the `FormatException`;
+  - queries without parameters (simple protocol, text format) failed with
+    `UnimplementedError` for `date`, `timestamptz`, `numeric`, `uuid`, `json`,
+    arrays, `interval` and other types without a text decoder; those values
+    are now returned as the server's text;
+  - `execute()`/`prepare()` called right before `close()` failed with
+    "connection was closed" instead of running first.
+
 - **Bug fix**: a `TZDateTime` (what non-UTC zones decode to) could not be
   sent back as a parameter: the text encoder appended an offset to
   `toIso8601String()`, which already ends with one
@@ -56,10 +175,10 @@
     `point[]`, `interval[]`, `time[]`, `timetz[]`, `inet[]` and `cidr[]`.
   - New `DecodingSettings` (`PostgreSQLConnection(decodingSettings: ...)` and
     `PgSessionSettings.decodingSettings`):
-    - `interval`: `IntervalDecoding.duration` (default, unchanged: `Duration`;
-      intervals with months or days throw `UnimplementedError` with an
-      explanatory message) or `IntervalDecoding.pgInterval` (new `PgInterval`
-      class with months, days and microseconds).
+    - `interval`: `IntervalDecoding.pgInterval` (**default**, new
+      `PgInterval` class with months, days and microseconds) or
+      `IntervalDecoding.duration` (the previous `Duration`; intervals with
+      months or days throw `UnimplementedError` with an explanatory message).
     - `extendedTypes` for `time`, `timetz`, `inet` and `cidr` (previously raw
       bytes, and `cidr` returned an invalid string):
       `ExtendedTypeDecoding.objects` (**default**: `PgTime`, `PgTimeTz`,

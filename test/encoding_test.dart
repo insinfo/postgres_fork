@@ -186,14 +186,19 @@ void main() {
     });
 
     test('interval', () async {
-      await expectInverse(Duration(minutes: 15), PostgreSQLDataType.interval);
-      await expectInverse(
-          Duration(days: 1, minutes: 15), PostgreSQLDataType.interval);
-      await expectInverse(
-          -Duration(days: 1, seconds: 5), PostgreSQLDataType.interval);
-      await expectInverse(Duration(days: 365 * 100000, microseconds: 1),
+      // interval é decodificado como PgInterval (padrão da 3.0.0).
+      await expectInverse(PgInterval.fromDuration(Duration(minutes: 15)),
           PostgreSQLDataType.interval);
-      await expectInverse(-Duration(days: 365 * 100000, microseconds: 1),
+      await expectInverse(PgInterval.fromDuration(Duration(days: 1, minutes: 15)),
+          PostgreSQLDataType.interval);
+      await expectInverse(PgInterval.fromDuration(-Duration(days: 1, seconds: 5)),
+          PostgreSQLDataType.interval);
+      await expectInverse(
+          PgInterval.fromDuration(Duration(days: 365 * 100000, microseconds: 1)),
+          PostgreSQLDataType.interval);
+      await expectInverse(
+          PgInterval.fromDuration(
+              -Duration(days: 365 * 100000, microseconds: 1)),
           PostgreSQLDataType.interval);
       try {
         await conn.query('INSERT INTO t (v) VALUES (@v:interval)',
@@ -587,7 +592,8 @@ void main() {
         final offset = tzOffset(dt);
 
         // largura do ano: ≤9999 → 4 dígitos; >9999 → 6 dígitos (padrão do Postgres)
-        final absYear = dt.year.abs();
+        // O ano 0 do DateTime é 1 a.C. (o -10 é 11 a.C.).
+        final absYear = dt.year <= 0 ? 1 - dt.year : dt.year;
         final yearWidth = absYear > 9999 ? 6 : 4;
         final yearStr = absYear.toString().padLeft(yearWidth, '0');
 
@@ -596,17 +602,19 @@ void main() {
             '${dt.minute.toString().padLeft(2, "0")}:'
             '${dt.second.toString().padLeft(2, "0")}.'
             '${dt.millisecond.toString().padLeft(3, "0")}'
-            '$offset${dt.isBefore(DateTime(0, 1, 1)) ? " BC" : ""}';
+            '$offset${dt.year <= 0 ? " BC" : ""}';
 
         expect(encoder.convert(dt, escapeStrings: false), "'$formatted'");
       }
     });
 
     test('Encode Double', () {
+      // Como parâmetro (escapeStrings: false), sem aspas: o servidor recusava
+      // "'nan'".
       final pairs = {
-        "'nan'": double.nan,
-        "'infinity'": double.infinity,
-        "'-infinity'": double.negativeInfinity,
+        'NaN': double.nan,
+        'Infinity': double.infinity,
+        '-Infinity': double.negativeInfinity,
         '1.7976931348623157e+308': double.maxFinite,
         '5e-324': double.minPositive,
         '-0.0': -0.0,
@@ -616,12 +624,19 @@ void main() {
       pairs.forEach((k, v) {
         expect(encoder.convert(v, escapeStrings: false), k);
       });
+      // No texto do SQL: literais entre aspas e negativos entre parênteses.
+      expect(encoder.convert(double.nan), "'nan'");
+      expect(encoder.convert(double.negativeInfinity), "'-infinity'");
+      expect(encoder.convert(-0.0), "'-0'::float8");
+      expect(encoder.convert(-1.5), '(-1.5)');
     });
 
     test('Encode Int', () {
       expect(encoder.convert(1), '1');
       expect(encoder.convert(1234324323), '1234324323');
-      expect(encoder.convert(-1234324323), '-1234324323');
+      // No texto do SQL, '5-@x' com x = -1 virava o comentário '5--1'.
+      expect(encoder.convert(-1234324323), '(-1234324323)');
+      expect(encoder.convert(-1234324323, escapeStrings: false), '-1234324323');
     });
 
     test('Encode Bool', () {

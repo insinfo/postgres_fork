@@ -16,11 +16,11 @@ class PostgresTextEncoder extends Converter<Object, String> {
     }
 
     if (input is int) {
-      return _encodeNumber(input);
+      return _encodeNumber(input, escapeStrings);
     }
 
     if (input is double) {
-      return _encodeDouble(input);
+      return _encodeDouble(input, escapeStrings);
     }
 
     if (input is String) {
@@ -40,7 +40,15 @@ class PostgresTextEncoder extends Converter<Object, String> {
     }
 
     if (input is PgPoint) {
-      return _encodePoint(input);
+      // No SQL, '(1.5, 2)' sem aspas era lido como um record.
+      final text = _encodePoint(input);
+      return escapeStrings ? "'$text'::point" : text;
+    }
+
+    // Duration é o tipo Dart de interval (o decodificador o devolve).
+    if (input is Duration) {
+      return convert(PgInterval(microseconds: input.inMicroseconds),
+          escapeStrings: escapeStrings);
     }
 
     // Tipos com codificação própria (PgInterval, PgTime, PgTimeTz, PgInet e
@@ -65,7 +73,10 @@ class PostgresTextEncoder extends Converter<Object, String> {
     }
 
     if (input is List) {
-      return _encodeList(input);
+      // No SQL o literal do array precisa de aspas ('{1,2}'); sem elas era
+      // um erro de sintaxe.
+      final text = _encodeList(input);
+      return escapeStrings ? _encodeString(text, true) : text;
     }
 
     throw PostgreSQLException("Could not infer type of value '$input'.");
@@ -116,29 +127,44 @@ class PostgresTextEncoder extends Converter<Object, String> {
     return buf.toString();
   }
 
-  String _encodeNumber(num value) {
+  /// [escapeStrings]: o valor vai no texto do SQL (protocolo simples). Fora
+  /// dele (parâmetro ou elemento de array), NaN e infinito não levam aspas
+  /// (antes o servidor recebia "'nan'" e recusava).
+  String _encodeNumber(num value, [bool escapeStrings = true]) {
     if (value.isNaN) {
-      return "'nan'";
+      return escapeStrings ? "'nan'" : 'NaN';
     }
 
     if (value.isInfinite) {
+      if (!escapeStrings) return value.isNegative ? '-Infinity' : 'Infinity';
       return value.isNegative ? "'-infinity'" : "'infinity'";
     }
 
-    return value.toInt().toString();
+    return _sqlNumber(value.toInt().toString(), value.isNegative, escapeStrings);
   }
 
-  String _encodeDouble(double value) {
+  String _encodeDouble(double value, [bool escapeStrings = true]) {
     if (value.isNaN) {
-      return "'nan'";
+      return escapeStrings ? "'nan'" : 'NaN';
     }
 
     if (value.isInfinite) {
+      if (!escapeStrings) return value.isNegative ? '-Infinity' : 'Infinity';
       return value.isNegative ? "'-infinity'" : "'infinity'";
     }
 
-    return value.toString();
+    if (escapeStrings && value == 0 && value.isNegative) {
+      // (-0.0) no SQL seria o numeric 0 (sem sinal).
+      return "'-0'::float8";
+    }
+    return _sqlNumber(value.toString(), value.isNegative, escapeStrings);
   }
+
+  /// Um número negativo no texto do SQL fica entre parênteses: '5-@x' com
+  /// x = -1 virava '5--1' (o resto da linha era um comentário) e '@x::int2'
+  /// com -32768 virava '-(32768::int2)', fora do intervalo.
+  static String _sqlNumber(String text, bool negative, bool escapeStrings) =>
+      escapeStrings && negative ? '($text)' : text;
 
   String _encodeBoolean(bool value) {
     return value ? 'TRUE' : 'FALSE';
@@ -149,6 +175,9 @@ class PostgresTextEncoder extends Converter<Object, String> {
     // non-UTC zones) already ends with its offset, so appending one gave
     // '...-0300-03:00' and the server rejected it (22009).
     var string = _iso8601Fields(value);
+    // DateTime counts years astronomically: year 0 is 1 BC, -1 is 2 BC.
+    // Previously year 0 was sent as '0000' (rejected) and -1 as '0001 BC'.
+    final bc = value.year <= 0;
 
     if (isDateOnly) {
       string = string.split('T').first;
@@ -163,22 +192,20 @@ class PostgresTextEncoder extends Converter<Object, String> {
       string = '$string$sign$hours:$minutes';
     }
 
-    if (string.substring(0, 1) == '-') {
-      string = '${string.substring(1)} BC';
-    } else if (string.substring(0, 1) == '+') {
-      string = string.substring(1);
+    if (bc) {
+      string = '$string BC';
     }
 
     return "'$string'";
   }
 
-  /// `yyyy-MM-ddTHH:mm:ss.mmmuuu` without a zone, years as in
-  /// [DateTime.toIso8601String] (`-0010`; six digits beyond ±9999).
+  /// `yyyy-MM-ddTHH:mm:ss.mmmuuu` without a zone (six digits beyond 9999);
+  /// years before 1 AD are written as the BC year (without ' BC', added by
+  /// the caller).
   static String _iso8601Fields(DateTime value) {
     String two(int n) => n.toString().padLeft(2, '0');
-    final year = value.year;
-    final sign = year < 0 ? '-' : (year > 9999 ? '+' : '');
-    final y = '$sign${year.abs().toString().padLeft(year.abs() > 9999 ? 6 : 4, '0')}';
+    final year = value.year <= 0 ? 1 - value.year : value.year;
+    final y = year.toString().padLeft(year > 9999 ? 6 : 4, '0');
     final ms = value.millisecond.toString().padLeft(3, '0');
     final us = value.microsecond == 0
         ? ''
@@ -200,7 +227,7 @@ class PostgresTextEncoder extends Converter<Object, String> {
   }
 
   String _encodePoint(PgPoint value) {
-    return '(${_encodeDouble(value.latitude)}, ${_encodeDouble(value.longitude)})';
+    return '(${_encodeDouble(value.latitude, false)}, ${_encodeDouble(value.longitude, false)})';
   }
 
   String _encodeList(List value) {
@@ -208,7 +235,16 @@ class PostgresTextEncoder extends Converter<Object, String> {
       return '{}';
     }
 
-    final type = value.fold(value.first.runtimeType, (type, item) {
+    // Elementos null viram NULL. Antes um null levava a lista inteira para o
+    // ramo JSON: ['a', null] virava {"\"a\"","null"} (dados errados).
+    final items = value.where((item) => item != null);
+    if (items.isEmpty) {
+      return '{${value.map((_) => 'NULL').join(',')}}';
+    }
+    String join(String Function(dynamic item) encode) =>
+        '{${value.map((item) => item == null ? 'NULL' : encode(item)).join(',')}}';
+
+    final type = items.fold(items.first.runtimeType, (type, item) {
       if (type == item.runtimeType) {
         return type;
       } else if ((type == int || type == double) && item is num) {
@@ -219,27 +255,30 @@ class PostgresTextEncoder extends Converter<Object, String> {
     });
 
     if (type == bool) {
-      return '{${value.cast<bool>().map((s) => s.toString()).join(',')}}';
+      return join((s) => s.toString());
     }
 
     if (type == int || type == double) {
-      return '{${value.cast<num>().map((s) => s is double ? _encodeDouble(s) : _encodeNumber(s)).join(',')}}';
+      return join((s) => s is double
+          ? _encodeDouble(s, false)
+          : _encodeNumber(s as num, false));
     }
 
     if (type == String) {
-      return '{${value.cast<String>().map((s) {
-        final escaped = s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+      return join((s) {
+        final escaped =
+            (s as String).replaceAll(r'\', r'\\').replaceAll('"', r'\"');
         return '"$escaped"';
-      }).join(',')}}';
+      });
     }
 
     if (type == Map) {
-      return '{${value.map((s) {
+      return join((s) {
         final escaped =
             json.encode(s).replaceAll(r'\', r'\\').replaceAll('"', r'\"');
 
         return '"$escaped"';
-      }).join(',')}}';
+      });
     }
 
     throw PostgreSQLException("Could not infer array type of value '$value'.");
@@ -250,6 +289,23 @@ class PostgresTextDecoder<T extends Object> extends Converter<Uint8List?, T?> {
   final PgDataType<T> _dataType;
   final Encoding encoding;
   const PostgresTextDecoder(this._dataType, this.encoding);
+
+  /// Tipos que [convert] decodifica. Valores de outros tipos no formato
+  /// texto (consultas sem parâmetros da API v3) são entregues como a
+  /// String do PostgreSQL.
+  static bool supports(PgDataType type) => const {
+        PgDataType.text,
+        PgDataType.varChar,
+        PgDataType.timestampWithoutTimezone,
+        PgDataType.integer,
+        PgDataType.smallInteger,
+        PgDataType.bigInteger,
+        PgDataType.serial,
+        PgDataType.bigSerial,
+        PgDataType.real,
+        PgDataType.double,
+        PgDataType.boolean,
+      }.contains(type);
 
   @override
   T? convert(Uint8List? input) {

@@ -402,16 +402,23 @@ class FieldDescription implements ColumnDescription {
   factory FieldDescription.read(
       ByteDataReader reader, Encoding encoding, TimeZoneSettings timeZone,
       [DecodingSettings decoding = const DecodingSettings()]) {
-    final buf = StringBuffer();
+    final nameBytes = <int>[];
     var byte = 0;
     do {
       byte = reader.readUint8();
       if (byte != 0) {
-        buf.writeCharCode(byte);
+        nameBytes.add(byte);
       }
     } while (byte != 0);
 
-    final fieldName = buf.toString();
+    // O nome vem no encoding da conexão (antes cada byte virava um
+    // caractere: "descrição" chegava como "descriÃ§Ã£o").
+    String fieldName;
+    try {
+      fieldName = encoding.decode(nameBytes);
+    } on FormatException {
+      fieldName = utf8.decode(nameBytes, allowMalformed: true);
+    }
 
     final tableID = reader.readUint32();
     final columnID = reader.readUint16();
@@ -501,7 +508,9 @@ class PostgreSQLFormatIdentifier {
 
     final components = t.split('::');
     if (components.length > 1) {
-      typeCast = components.sublist(1).join('');
+      // '@x::timestamptz::text': mais de um cast (antes viravam
+      // 'timestamptztext').
+      typeCast = components.sublist(1).join('::');
     }
 
     final variableComponents = components.first.split(':');

@@ -30,9 +30,10 @@ String _seconds(int seconds, int fraction) {
 /// não tem duração fixa e um dia pode ter 23 ou 25 horas quando há mudança de
 /// horário de verão, por isso esses valores não cabem num [Duration].
 ///
-/// Usado ao decodificar `interval` com
-/// `DecodingSettings(interval: IntervalDecoding.pgInterval)` e aceito como
-/// parâmetro de consultas.
+/// É o tipo devolvido ao decodificar `interval` (padrão desde a 3.0.0;
+/// `DecodingSettings(interval: IntervalDecoding.duration)` volta a devolver
+/// [Duration]) e é aceito como parâmetro de consultas, assim como
+/// [Duration].
 class PgInterval implements Comparable<PgInterval>, PostgresTextEncodable {
   /// Meses (12 meses = 1 ano).
   final int months;

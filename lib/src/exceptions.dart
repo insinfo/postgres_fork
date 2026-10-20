@@ -50,8 +50,11 @@ class PostgreSQLException implements Exception {
         (ErrorField e) => e.identificationToken == identifer,
         orElse: () => ErrorField(null, null)));
 
+    // O campo V (PostgreSQL 9.6+) nunca é traduzido; o S segue lc_messages
+    // (por exemplo, 'FEHLER' ou 'PÂNICO' não eram reconhecidos).
     severity = ErrorField.severityFromString(
-        finder(ErrorField.SeverityIdentifier).text);
+        finder(ErrorField.NonLocalizedSeverityIdentifier).text ??
+            finder(ErrorField.SeverityIdentifier).text);
     code = finder(ErrorField.CodeIdentifier).text;
     message = finder(ErrorField.MessageIdentifier).text;
     detail = finder(ErrorField.DetailIdentifier).text;

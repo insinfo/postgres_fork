@@ -29,7 +29,7 @@ class ErrorResponseMessage implements ServerMessage {
         // Fim do campo (null terminator)
         // Decodifica os bytes acumulados para este campo usando o encoding fornecido
         fields.add(ErrorField(
-            identificationToken, encoding.decode(currentFieldBytes)));
+            identificationToken, _decodeField(currentFieldBytes, encoding)));
         // Prepara para o próximo token de identificação
         identificationToken = null;
       } else {
@@ -38,8 +38,19 @@ class ErrorResponseMessage implements ServerMessage {
     }
     // Caso a mensagem termine sem um null terminator para o último campo (improvável com PG)
     if (identificationToken != null && currentFieldBytes.isNotEmpty) {
-      fields.add(
-          ErrorField(identificationToken, encoding.decode(currentFieldBytes)));
+      fields.add(ErrorField(
+          identificationToken, _decodeField(currentFieldBytes, encoding)));
+    }
+  }
+
+  /// Mensagens enviadas antes de o client_encoding valer (por exemplo, um
+  /// erro na conexão) vêm no encoding do servidor: se o encoding da conexão
+  /// não as decodifica, usa UTF-8 tolerante em vez de perder o erro.
+  static String _decodeField(List<int> bytes, Encoding encoding) {
+    try {
+      return encoding.decode(bytes);
+    } on FormatException {
+      return utf8.decode(bytes, allowMalformed: true);
     }
   }
 }
@@ -182,6 +193,9 @@ class NotificationResponseMessage extends ServerMessage {
 class CommandCompleteMessage extends ServerMessage {
   final int rowsAffected;
 
+  /// The command tag sent by the server (e.g. `INSERT 0 1`, `DISCARD ALL`).
+  final String commandTag;
+
   /// Match the digits at the end of the string.
   /// Possible values are:
   ///  ```
@@ -201,7 +215,7 @@ class CommandCompleteMessage extends ServerMessage {
   ///  *oid is only used with `INSERT` and it's always 0.
   static final _affectedRowsExp = RegExp(r'\d+$');
 
-  CommandCompleteMessage._(this.rowsAffected);
+  CommandCompleteMessage._(this.rowsAffected, this.commandTag);
 
   factory CommandCompleteMessage(Uint8List bytes, Encoding encoding) {
     final str = encoding.decode(bytes.sublist(0, bytes.length - 1));
@@ -210,7 +224,7 @@ class CommandCompleteMessage extends ServerMessage {
     if (match != null) {
       rowsAffected = int.parse(match.group(0)!);
     }
-    return CommandCompleteMessage._(rowsAffected);
+    return CommandCompleteMessage._(rowsAffected, str);
   }
 
   @override
@@ -466,6 +480,7 @@ bool _bytesEqual(List<int>? a, List<int>? b) {
 
 class ErrorField {
   static const int SeverityIdentifier = 83; // ASCII para 'S'
+  static const int NonLocalizedSeverityIdentifier = 86; // 'V'
   static const int CodeIdentifier = 67;
   static const int MessageIdentifier = 77;
   static const int DetailIdentifier = 68;
