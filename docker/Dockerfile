@@ -1,4 +1,5 @@
-FROM postgres:14.3
+ARG POSTGRES_VERSION=14.3
+FROM postgres:${POSTGRES_VERSION}
 ADD pg_hba.conf /var/lib/postgresql/data/
 ADD postgresql.conf /var/lib/postgresql/data/
 COPY init.sql /docker-entrypoint-initdb.d/

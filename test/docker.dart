@@ -111,13 +111,22 @@ Future<DockerProcess> startPostgres({
   );
 }
 
+/// The PostgreSQL version of the test images: `POSTGRES_TEST_VERSION`
+/// (`14`, `15`, `16`, `17`... as in the CI matrix), 14.3 by default.
+String get postgresTestVersion {
+  final version = Platform.environment['POSTGRES_TEST_VERSION'];
+  return version == null || version.trim().isEmpty ? '14.3' : version.trim();
+}
+
 Future<Directory> buildCustomImage(
     String dockerfileContent, String customImageTag) async {
   // --- Step 1: Build the custom Docker image ---
   final tempDir = await Directory.systemTemp.createTemp('postgres-dart-test-');
   final dockerfilePath = p.join(tempDir.path, 'Dockerfile');
   final dockerfile = File(dockerfilePath);
-  await dockerfile.writeAsString(dockerfileContent);
+  await dockerfile.writeAsString(dockerfileContent.replaceFirst(
+      RegExp(r'^FROM postgres:\S+', multiLine: true),
+      'FROM postgres:$postgresTestVersion'));
 
   //print('Building custom Docker image: $customImageTag from ${tempDir.path}');
   final stopwatchBuild = Stopwatch()..start();

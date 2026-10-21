@@ -21,11 +21,14 @@ on:
 
 jobs:
   build:
+    name: PostgreSQL ${{ matrix.postgres-version }} (Dart ${{ matrix.sdk }})
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04]
         sdk: [3.6.2]
+        postgres-version: ['14', '15', '16', '17']
 
     steps:
       - name: SetLocale
@@ -72,9 +75,9 @@ jobs:
       # pre-pull the image so `usePostgresDocker` does not delay which may causes 
       # tests to timeout
       - name: pull postgres image
-        run: |          
-          docker pull postgres:14.3
-          docker build -t custom/postgres:14.3 ./docker
+        run: |
+          docker pull postgres:${{ matrix.postgres-version }}
+          docker build --build-arg POSTGRES_VERSION=${{ matrix.postgres-version }} -t custom/postgres:${{ matrix.postgres-version }} ./docker
           mkdir ./data
       #docker run --rm --name="custom_postgres" -e POSTGRES_PASSWORD=dart -v "./data:/var/lib/postgresql/data:rw" -p 5432:5432 custom/postgres:14.3 & 
         
@@ -83,5 +86,7 @@ jobs:
       #   the container while another test is using the container. In other words, each
       #   test file will call `usePostgresDocker` for container setup and teardown and  
       #   run its test in between. Using concurrency of "1" will ensure this behavior.   
-      - name: Run tests
+      - name: Run tests on PostgreSQL ${{ matrix.postgres-version }}
+        env:
+          POSTGRES_TEST_VERSION: ${{ matrix.postgres-version }}
         run: dart test -j 1
