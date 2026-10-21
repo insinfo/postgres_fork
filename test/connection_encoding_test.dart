@@ -29,10 +29,13 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone &
     localedef -i pt_BR -f CP1252 pt_BR
 
 # ---------- variáveis padrão que o PostgreSQL usará ----------
+# The cluster's locale comes from POSTGRES_INITDB_ARGS. No LC_ALL: it
+# overrides LC_MESSAGES, and with a pt_BR locale the output of initdb and the
+# server log are translated, in CP1252 bytes that are not UTF-8 (docker_process
+# reads them to detect the start: FormatException on PostgreSQL 15+, whose
+# images ship the translations).
 ENV LANG=pt_BR.CP1252
-ENV LC_ALL=pt_BR.CP1252
-# Server log in English: the images of PostgreSQL 15+ ship translations, and
-# a pt_BR.CP1252 log is not UTF-8 (docker_process reads it to detect start).
+ENV LC_MESSAGES=C
 ENV POSTGRES_INITDB_ARGS="--encoding=WIN1252 --locale=pt_BR.CP1252 --lc-messages=C"
 ''';
 
