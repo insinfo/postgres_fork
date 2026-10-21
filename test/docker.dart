@@ -281,13 +281,18 @@ Future<bool> isPostgresContainerRunning(String containerName) async {
 Future<void> setupDatabase(DockerProcess dp, String containerName) async {
   // Setup the database to support all kind of tests
   // see _setupDatabaseStatements definition for details
-  for (var stmt in setupDatabaseStatements) {
+  for (final (stmt, database) in [
+    for (final stmt in setupDatabaseStatements) (stmt, 'postgres'),
+    for (final stmt in setupDartTestStatements) (stmt, 'dart_test'),
+  ]) {
     final args = [
       'psql',
       '-c',
       stmt,
       '-U',
       'postgres',
+      '-d',
+      database,
     ];
     final res = await dp.exec(args);
     if (res.exitCode != 0) {
@@ -308,17 +313,24 @@ Future<void> setupDatabase(DockerProcess dp, String containerName) async {
 // This is setup is the same as the one from the old travis ci except for the
 // replication user which is a new addition.
 final setupDatabaseStatements = <String>[
-  // create testing database
-  'create database dart_test;',
   // create dart user
   'create user dart with createdb;',
   "alter user dart with password 'dart';",
+  // create testing database, owned by dart: since PostgreSQL 15 the public
+  // schema belongs to the database owner and the other roles cannot create
+  // tables in it ("permission denied for schema public").
+  'create database dart_test owner dart;',
   'grant all on database dart_test to dart;',
   // create darttrust user
   'create user darttrust with createdb;',
   'grant all on database dart_test to darttrust;',
   // create replication user
   "create role replication with replication password 'replication' login;",
+];
+
+/// Run in the dart_test database after [setupDatabaseStatements].
+final setupDartTestStatements = <String>[
+  'grant all on schema public to darttrust, replication;',
 ];
 
 /// Finds containers using a specific host port and stops them.

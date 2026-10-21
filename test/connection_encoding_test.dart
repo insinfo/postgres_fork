@@ -31,7 +31,9 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone &
 # ---------- variáveis padrão que o PostgreSQL usará ----------
 ENV LANG=pt_BR.CP1252
 ENV LC_ALL=pt_BR.CP1252
-ENV POSTGRES_INITDB_ARGS="--encoding=WIN1252 --locale=pt_BR.CP1252"
+# Server log in English: the images of PostgreSQL 15+ ship translations, and
+# a pt_BR.CP1252 log is not UTF-8 (docker_process reads it to detect start).
+ENV POSTGRES_INITDB_ARGS="--encoding=WIN1252 --locale=pt_BR.CP1252 --lc-messages=C"
 ''';
 
 // Define a unique tag for the custom image

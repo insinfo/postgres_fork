@@ -28,7 +28,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04]
         sdk: [3.6.2]
-        postgres-version: ['14', '15', '16', '17']
+        postgres-version: ['14', '15', '16', '17', '18']
 
     steps:
       - name: SetLocale
