@@ -6,6 +6,8 @@ import 'package:postgres_fork/postgres.dart';
 import 'package:test/expect.dart';
 import 'package:test/scaffolding.dart';
 
+import 'docker.dart' show postgresTestVersion;
+
 void main() {
   // These tests start their own containers (non-ASCII user and password on
   // separate ports); without Docker they cannot run.
@@ -27,7 +29,7 @@ void main() {
       () async {
         docker = await startPostgres(
           name: 'non_ascii_test_clear_password',
-          version: 'latest',
+          version: postgresTestVersion,
           pgPort: port,
           pgDatabase: db,
           pgUser: user,
@@ -70,7 +72,7 @@ void main() {
       () async {
         docker = await startPostgres(
           name: 'non_ascii_test_md5',
-          version: 'latest',
+          version: postgresTestVersion,
           pgPort: port,
           pgDatabase: db,
           pgUser: user,
@@ -118,7 +120,7 @@ void main() {
       () async {
         docker = await startPostgres(
           name: 'non_ascii_test_scram_sha256',
-          version: 'latest',
+          version: postgresTestVersion,
           pgPort: port,
           pgDatabase: db,
           pgUser: user,
