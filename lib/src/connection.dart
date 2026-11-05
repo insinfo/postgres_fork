@@ -50,6 +50,10 @@ class PostgreSQLConnection extends Object
   /// avoiding `SET` commands after connecting.
   /// [sslMode] chooses how SSL is used (see [PgSslMode]); when null, [useSSL]
   /// decides as before.
+  /// [securityContext] holds the CA certificates that verify the server with
+  /// [PgSslMode.verifyFull] (the system roots by default) and the client
+  /// certificate, when the server asks for one. It requires SSL: with
+  /// [PgSslMode.disable] it throws [ArgumentError].
   /// [cancelQueryOnTimeout] also cancels the query on the server when it
   /// exceeds its timeout (see [cancelQuery]).
   /// [maxPreparedStatements] limits the prepared statements kept by this
@@ -74,6 +78,7 @@ class PostgreSQLConnection extends Object
     this.applicationName,
     Map<String, String> startupParameters = const {},
     this.sslMode,
+    this.securityContext,
     this.cancelQueryOnTimeout = false,
     int? maxPreparedStatements,
   })  : startupParameters = Map.unmodifiable(startupParameters),
@@ -81,6 +86,10 @@ class PostgreSQLConnection extends Object
     if (maxPreparedStatements != null && maxPreparedStatements < 1) {
       throw ArgumentError.value(maxPreparedStatements, 'maxPreparedStatements',
           'Must be at least 1');
+    }
+    if (securityContext != null && effectiveSslMode == PgSslMode.disable) {
+      throw ArgumentError.value(securityContext, 'securityContext',
+          'Requires SSL, but the SSL mode is disable');
     }
     _checkStartupParameters(this.startupParameters);
     if (timeZone is String) {
@@ -138,6 +147,10 @@ class PostgreSQLConnection extends Object
   /// SSL mode. When null, [useSSL] decides: [PgSslMode.require] when true,
   /// [PgSslMode.disable] when false.
   final PgSslMode? sslMode;
+
+  /// The trusted CAs and the client certificate of the TLS handshake; null
+  /// uses the system roots.
+  final SecurityContext? securityContext;
 
   /// When true, a query that exceeds its timeout is also cancelled on the
   /// server with a CancelRequest (see [cancelQuery]). Otherwise (default)
@@ -524,6 +537,7 @@ class PostgreSQLConnection extends Object
 
     final secure = await SecureSocket.secure(originalSocket,
             host: mode == PgSslMode.verifyFull ? host : null,
+            context: securityContext,
             onBadCertificate:
                 mode == PgSslMode.verifyFull ? null : (certificate) => true)
         .timeout(Duration(seconds: timeout));

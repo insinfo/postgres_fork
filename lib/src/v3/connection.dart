@@ -59,6 +59,8 @@ class _ResolvedSettings {
   bool onBadSslCertificate(X509Certificate certificate) {
     return settings?.onBadSslCertificate?.call(certificate) ?? false;
   }
+
+  SecurityContext? get securityContext => settings?.securityContext;
 }
 
 class PgConnectionImplementation implements PgConnection {
@@ -140,6 +142,7 @@ class PgConnectionImplementation implements PgConnection {
 
       socket = await SecureSocket.secure(
         socket,
+        context: settings.securityContext,
         onBadCertificate: settings.onBadSslCertificate,
       ).timeout(settings.connectTimeout);
 
