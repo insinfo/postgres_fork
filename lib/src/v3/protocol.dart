@@ -75,8 +75,11 @@ StreamTransformer<Uint8List, ServerMessage> _readMessages(
         emitFinishedMessages();
       }
 
+      // onDone: without it the end of the socket did not reach the connection,
+      // and an operation waiting for a reply waited forever.
       final rawSubscription = rawStream.listen(handleChunk)
-        ..onError(listener.addErrorSync);
+        ..onError(listener.addErrorSync)
+        ..onDone(listener.closeSync);
 
       listener.onPause = () {
         paused = true;

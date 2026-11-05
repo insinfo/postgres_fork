@@ -181,10 +181,7 @@ void main() {
                 requireSsl: true),
             sessionSettings: v3.PgSessionSettings(
                 connectTimeout: const Duration(seconds: 5),
-                securityContext: context))
-            // The fake server closes after the startup message, and open()
-            // does not end when that happens.
-            .timeout(const Duration(seconds: 2));
+                securityContext: context));
         await connection.close();
         return null;
       } catch (e) {

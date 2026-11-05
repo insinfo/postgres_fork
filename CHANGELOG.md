@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.1.1
+
+- `PgConnection` (`postgres_v3_experimental.dart`): when the server closed the
+  connection without an error message, `PgConnection.open` and any operation
+  waiting for a reply waited forever, because the end of the socket did not
+  reach the connection. They now fail with a `PostgreSQLException`.
+- `PgConnection.open`: `connectTimeout` also bounds the startup and the
+  authentication, so a server that accepts the connection and never answers
+  fails with a `TimeoutException`. A failed startup closes the socket, which
+  stayed open.
+
+`PostgreSQLConnection` was not affected.
+
 ## 3.1.0
 
 - `PostgreSQLConnection.securityContext` and

@@ -89,8 +89,25 @@ class PgConnectionImplementation implements PgConnection {
     }
 
     final connection = PgConnectionImplementation._(channel, settings);
-    await connection._startup();
+    try {
+      await connection._startup().timeout(settings.connectTimeout);
+    } catch (_) {
+      await connection._releaseAfterFailedStartup();
+      rethrow;
+    }
     return connection;
+  }
+
+  /// Closes the socket of a connection whose startup failed or timed out: the
+  /// caller never gets this connection, so nothing else could close it.
+  Future<void> _releaseAfterFailedStartup() async {
+    _isClosed = true;
+    _pending = null;
+    try {
+      await Future.wait([_channel.sink.close(), _serverMessages.cancel()]);
+    } catch (_) {
+      // The socket is already gone.
+    }
   }
 
   static Future<StreamChannel<BaseMessage>> _connect(
