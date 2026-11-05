@@ -50,7 +50,7 @@ class _ResolvedSettings {
         password = endpoint.password ?? 'postgres',
         connectTimeout =
             settings?.connectTimeout ?? const Duration(seconds: 15),
-        queryTimeout = settings?.connectTimeout ?? const Duration(minutes: 5),
+        queryTimeout = settings?.queryTimeout ?? const Duration(minutes: 5),
         timeZone = settings?.timeZone ?? endpoint.timeZone,
         encoding = settings?.encoding ?? endpoint.encoding,
         decoding = settings?.decodingSettings ?? const DecodingSettings(),
