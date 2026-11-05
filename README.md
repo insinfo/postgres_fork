@@ -134,6 +134,25 @@ final total = PgDecimal.parse('10.50') * PgDecimal.fromInt(3); // 31.50
 
 See the API documentation: https://pub.dev/documentation/postgres/latest/
 
+## TLS certificates
+
+`PgSslMode.verifyFull` verifies the server against the system roots. For a private CA, or to present a client certificate, pass a `SecurityContext`:
+
+```dart
+final connection = PostgreSQLConnection(
+  'db.example.com',
+  5432,
+  'app',
+  username: 'app',
+  password: 'secret',
+  sslMode: PgSslMode.verifyFull,
+  securityContext: SecurityContext()
+    ..setTrustedCertificates('/etc/ssl/db/ca.pem')
+    ..useCertificateChain('/etc/ssl/db/client.pem')
+    ..usePrivateKey('/etc/ssl/db/client.key', password: 'key-password'),
+);
+```
+
 ## Additional Capabilities
 
 The library supports connecting to PostgreSQL using the [Streaming Replication Protocol][].

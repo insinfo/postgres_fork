@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1.0
+
+- `PostgreSQLConnection.securityContext` and
+  `PgSessionSettings.securityContext`: a private CA can verify the server with
+  `PgSslMode.verifyFull` (only the system roots could), and the connection can
+  present a client certificate. A `securityContext` without SSL throws
+  `ArgumentError`.
+
 ## 3.0.0
 
 - `DecodingSettings`: `IntervalDecoding.text` (the server's interval text,

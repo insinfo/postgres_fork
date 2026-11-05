@@ -270,6 +270,10 @@ class PgSessionSettings {
   final Encoding? encoding;
   final bool Function(X509Certificate)? onBadSslCertificate;
 
+  /// The trusted CAs and the client certificate of the TLS handshake; null
+  /// uses the system roots.
+  final SecurityContext? securityContext;
+
   /// An optional [StreamChannelTransformer] sitting behind the postgres client
   /// as implemented in the `posgres` package and the database server.
   ///
@@ -298,6 +302,7 @@ class PgSessionSettings {
     this.timeZone,
     this.encoding,
     this.onBadSslCertificate,
+    this.securityContext,
     this.transformer,
     this.decodingSettings,
     this.applicationName,

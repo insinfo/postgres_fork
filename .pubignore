@@ -1,0 +1,2 @@
+# Certificates of the TLS tests: not needed by users of the package.
+test/fixtures/tls/
