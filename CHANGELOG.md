@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.1.2
+
+- A write to a socket the server reset (a restart, a proxy, a network failure) became an uncaught error, which ends the process by default, although the call itself failed: the error goes to the socket's `done` future, and nobody listened to it.
+
 ## 3.1.1
 
 - `PgConnection` (`postgres_v3_experimental.dart`): when the server closed the

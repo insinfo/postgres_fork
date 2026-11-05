@@ -125,6 +125,7 @@ class PgConnectionImplementation implements PgConnection {
       socket =
           await Socket.connect(host, port, timeout: settings.connectTimeout);
     }
+    _observeDone(socket);
 
     final sslCompleter = Completer<int>.sync();
     // ignore: cancel_subscriptions
@@ -162,6 +163,7 @@ class PgConnectionImplementation implements PgConnection {
         context: settings.securityContext,
         onBadCertificate: settings.onBadSslCertificate,
       ).timeout(settings.connectTimeout);
+      _observeDone(socket);
 
       // We can listen to the secured socket again, the existing subscription is
       // ignored.
@@ -952,4 +954,11 @@ class _AuthenticationProcedure extends _PendingOperation {
       _done.complete();
     }
   }
+}
+
+/// Errors of a write to a socket the server reset go to its `done` future; with
+/// nobody listening they are uncaught errors, which end a process by default.
+/// The command already fails through the read side of the socket.
+void _observeDone(Socket socket) {
+  socket.done.then<void>((_) {}, onError: (Object _) {});
 }

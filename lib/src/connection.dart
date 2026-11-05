@@ -277,6 +277,7 @@ class PostgreSQLConnection extends Object
         _socket = await Socket.connect(host, port)
             .timeout(Duration(seconds: timeoutInSeconds));
       }
+      _observeDone(_socket!);
 
       _framer = MessageFramer(encoding, timeZone, decodingSettings,
           replicationMode != ReplicationMode.none);
@@ -541,6 +542,7 @@ class PostgreSQLConnection extends Object
             onBadCertificate:
                 mode == PgSslMode.verifyFull ? null : (certificate) => true)
         .timeout(Duration(seconds: timeout));
+    _observeDone(secure);
     return _SslNegotiation(secure, null);
   }
 
@@ -561,6 +563,7 @@ class PostgreSQLConnection extends Object
       socket = await Socket.connect(host, port)
           .timeout(Duration(seconds: timeoutInSeconds));
     }
+    _observeDone(socket);
     try {
       if (_usingSsl) {
         final negotiation = await _negotiateSsl(socket, effectiveSslMode,
@@ -1338,4 +1341,11 @@ extension PgQueryStreamExecutionContext on PostgreSQLExecutionContext {
         'PostgreSQLConnection, its transactions and PostgreSQLPool, not by '
         '$runtimeType.');
   }
+}
+
+/// Errors of a write to a socket the server reset go to its `done` future; with
+/// nobody listening they are uncaught errors, which end a process by default.
+/// The command already fails through the read side of the socket.
+void _observeDone(Socket socket) {
+  socket.done.then<void>((_) {}, onError: (Object _) {});
 }
